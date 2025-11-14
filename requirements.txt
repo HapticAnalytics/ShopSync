@@ -1,9 +1,8 @@
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
 python-multipart==0.0.9
-supabase==2.3.4
+supabase==2.9.0
 python-dotenv==1.0.1
 pydantic==1.10.13
 twilio==8.13.0
-httpx==0.25.2
-
+httpx==0.27.2
