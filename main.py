@@ -4,7 +4,7 @@ from database import get_supabase_client
 from schemas import *
 from typing import List
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 from twilio.rest import Client
@@ -97,6 +97,11 @@ async def root():
     """Health check endpoint"""
     return {"message": "ShopSync API is running", "version": "1.0.0"}
 
+@app.get("/health")
+async def health():
+    """Health check endpoint for monitoring"""
+    return {"status": "healthy"}
+
 # ==================== VEHICLE ENDPOINTS ====================
 
 @app.post("/vehicles/", response_model=VehicleResponse)
@@ -130,7 +135,7 @@ async def create_vehicle(vehicle: VehicleCreate, shop_id: str):
         vehicle_data = response.data[0]
         
         # Send SMS notification to customer
-        portal_url = f"http://localhost:3000/track/{unique_link}"
+        portal_url = f"https://frontend-dusky-omega-j8xii0qafc.vercel.app/track/{unique_link}"
         sms_message = f"Hi {vehicle.customer_name}! Your vehicle is checked in at Summit Trucks. Track its status here: {portal_url}"
         print(f"DEBUG: Attempting to send SMS to {vehicle.customer_phone}")
         print(f"DEBUG: Message: {sms_message}")
@@ -207,6 +212,26 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
         send_sms(current_vehicle["customer_phone"], sms_message)
         
         return {"success": True, "message": "Status updated successfully"}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/vehicles/{vehicle_id}")
+async def delete_vehicle(vehicle_id: str):
+    """
+    Delete a vehicle from the system
+    """
+    try:
+        # Delete related records first (messages, media, approvals, service records)
+        supabase.table("messages").delete().eq("vehicle_id", vehicle_id).execute()
+        supabase.table("media").delete().eq("vehicle_id", vehicle_id).execute()
+        supabase.table("approvals").delete().eq("vehicle_id", vehicle_id).execute()
+        supabase.table("service_records").delete().eq("vehicle_id", vehicle_id).execute()
+        
+        # Delete the vehicle
+        response = supabase.table("vehicles").delete().eq("vehicle_id", vehicle_id).execute()
+        
+        return {"success": True, "message": "Vehicle deleted successfully"}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -352,6 +377,134 @@ async def get_approvals(vehicle_id: str):
         return response.data
     
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== SERVICE RECORD ENDPOINTS ====================
+
+@app.post("/vehicles/{vehicle_id}/service")
+async def create_service_record(vehicle_id: str, service: ServiceRecordCreate):
+    """
+    Log a service record (like oil change) and schedule reminder
+    """
+    try:
+        # Get vehicle data for customer info
+        vehicle_response = supabase.table("vehicles").select("*").eq("vehicle_id", vehicle_id).execute()
+        
+        if not vehicle_response.data:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+        
+        vehicle = vehicle_response.data[0]
+        
+        # Calculate next reminder date if interval provided
+        next_reminder_date = None
+        if service.reminder_interval_months:
+            next_reminder_date = (datetime.now() + timedelta(days=30 * service.reminder_interval_months)).isoformat()
+        
+        # Insert service record
+        response = supabase.table("service_records").insert({
+            "vehicle_id": vehicle_id,
+            "service_type": service.service_type,
+            "current_mileage": service.current_mileage,
+            "next_service_mileage": service.next_service_mileage,
+            "reminder_interval_months": service.reminder_interval_months,
+            "next_reminder_date": next_reminder_date,
+            "notes": service.notes,
+            "reminder_sent": False
+        }).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=400, detail="Failed to create service record")
+        
+        service_data = response.data[0]
+        
+        # Send confirmation SMS to customer
+        service_type_readable = service.service_type.replace('_', ' ').title()
+        sms_message = f"Service completed: {service_type_readable} at {service.current_mileage:,} miles."
+        
+        if service.next_service_mileage:
+            sms_message += f" Next service due at {service.next_service_mileage:,} miles"
+        
+        if service.reminder_interval_months:
+            sms_message += f" or in {service.reminder_interval_months} months"
+        
+        sms_message += ". We'll remind you when it's time! - Summit Trucks"
+        
+        send_sms(vehicle["customer_phone"], sms_message)
+        
+        return ServiceRecordResponse(**service_data)
+    
+    except Exception as e:
+        print(f"ERROR creating service record: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/vehicles/{vehicle_id}/service")
+async def get_service_records(vehicle_id: str):
+    """
+    Get all service records for a vehicle
+    """
+    try:
+        response = supabase.table("service_records").select("*").eq("vehicle_id", vehicle_id).order("performed_at", desc=True).execute()
+        return response.data
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/service-reminders/due")
+async def get_due_reminders():
+    """
+    Get all service reminders that are due (for cron job)
+    """
+    try:
+        # Get records where next_reminder_date is today or earlier and reminder not sent
+        today = datetime.now().isoformat()
+        
+        response = supabase.table("service_records").select("*, vehicles(*)").lte("next_reminder_date", today).eq("reminder_sent", False).execute()
+        
+        return response.data
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/service-reminders/send")
+async def send_service_reminders():
+    """
+    Send SMS reminders for all due services (called by cron job)
+    """
+    try:
+        # Get due reminders
+        due_reminders = await get_due_reminders()
+        
+        sent_count = 0
+        
+        for record in due_reminders:
+            vehicle = record.get("vehicles")
+            if not vehicle:
+                continue
+            
+            # Build reminder message
+            service_type = record["service_type"].replace('_', ' ').title()
+            message = f"Reminder: Your {vehicle['year']} {vehicle['make']} {vehicle['model']} "
+            
+            if record["next_service_mileage"]:
+                message += f"is due for {service_type} at {record['next_service_mileage']:,} miles. "
+            else:
+                message += f"is due for {service_type}. "
+            
+            message += "Reply YES to schedule or call Summit Trucks!"
+            
+            # Send SMS
+            if send_sms(vehicle["customer_phone"], message):
+                # Mark reminder as sent
+                supabase.table("service_records").update({
+                    "reminder_sent": True
+                }).eq("service_id", record["service_id"]).execute()
+                
+                sent_count += 1
+        
+        return {"success": True, "reminders_sent": sent_count}
+    
+    except Exception as e:
+        print(f"ERROR sending reminders: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ==================== RUN THE APP ====================
