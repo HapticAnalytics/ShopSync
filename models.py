@@ -70,3 +70,16 @@ class Approval(BaseModel):
     approved: Optional[bool] = None
     approved_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+
+class ServiceRecord(BaseModel):
+    service_id: Optional[str] = None
+    vehicle_id: str
+    service_type: str  # 'oil_change', 'tire_rotation', etc.
+    current_mileage: int
+    next_service_mileage: Optional[int] = None
+    reminder_interval_months: Optional[int] = None
+    reminder_sent: Optional[bool] = False
+    next_reminder_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    performed_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
