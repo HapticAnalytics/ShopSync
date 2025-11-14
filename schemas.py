@@ -29,6 +29,13 @@ class ApprovalCreate(BaseModel):
 class ApprovalResponse(BaseModel):
     approved: bool
 
+class ServiceRecordCreate(BaseModel):
+    service_type: str  # 'oil_change', 'tire_rotation', etc.
+    current_mileage: int
+    next_service_mileage: Optional[int] = None
+    reminder_interval_months: Optional[int] = None
+    notes: Optional[str] = None
+
 # Response schemas (what API sends back to clients)
 class VehicleResponse(BaseModel):
     vehicle_id: str
@@ -45,3 +52,13 @@ class VehicleResponse(BaseModel):
 class StatusResponse(BaseModel):
     success: bool
     message: str
+
+class ServiceRecordResponse(BaseModel):
+    service_id: str
+    vehicle_id: str
+    service_type: str
+    current_mileage: int
+    next_service_mileage: Optional[int]
+    reminder_interval_months: Optional[int]
+    next_reminder_date: Optional[datetime]
+    performed_at: datetime
