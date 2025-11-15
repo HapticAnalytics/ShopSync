@@ -149,9 +149,11 @@ async def create_vehicle(vehicle: VehicleCreate, shop_id: str):
         
         return VehicleResponse(**vehicle_data)
     
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"ERROR creating vehicle: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to create vehicle")
 
 @app.get("/vehicles/{unique_link}")
 async def get_vehicle_by_link(unique_link: str):
@@ -166,8 +168,11 @@ async def get_vehicle_by_link(unique_link: str):
         
         return response.data[0]
     
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR fetching vehicle by link: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch vehicle")
 
 @app.get("/shop/{shop_id}/vehicles")
 async def get_shop_vehicles(shop_id: str):
@@ -179,18 +184,27 @@ async def get_shop_vehicles(shop_id: str):
         return response.data
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR fetching shop vehicles: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch vehicles")
 
 @app.patch("/vehicles/{vehicle_id}/status")
 async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, user_id: str):
     """
     Update vehicle status and create an update record.
 
-    - Core DB update should ALWAYS succeed/return correctly if possible.
-    - SMS notifications are optional and controlled by ENABLE_STATUS_SMS.
-    - SMS failures must NEVER break the request.
+    Critical path:
+      - Fetch vehicle
+      - Update vehicle.status
+
+    Non-critical (best-effort):
+      - Insert into updates table
+      - Send SMS (when enabled)
+
+    If non-critical steps fail, the API still returns success so the
+    frontend doesn't show "Failed to archive vehicle" when the status
+    actually changed.
     """
-    # --- DB work first ---
+    # ---- CRITICAL: fetch + update vehicle status ----
     try:
         # Get current vehicle data
         vehicle_response = supabase.table("vehicles").select("*").eq("vehicle_id", vehicle_id).execute()
@@ -199,14 +213,22 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
             raise HTTPException(status_code=404, detail="Vehicle not found")
         
         current_vehicle = vehicle_response.data[0]
-        old_status = current_vehicle["status"]
+        old_status = current_vehicle.get("status")
         
         # Update vehicle status
         supabase.table("vehicles").update({
             "status": status_update.new_status
         }).eq("vehicle_id", vehicle_id).execute()
-        
-        # Create update record
+    
+    except HTTPException:
+        # Bubble up known HTTP errors (e.g., 404)
+        raise
+    except Exception as e:
+        print(f"ERROR updating vehicle status (critical): {e}")
+        raise HTTPException(status_code=500, detail="Failed to update vehicle status")
+
+    # ---- NON-CRITICAL: log update record ----
+    try:
         supabase.table("updates").insert({
             "vehicle_id": vehicle_id,
             "user_id": user_id,
@@ -214,15 +236,11 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
             "new_status": status_update.new_status,
             "message": status_update.message
         }).execute()
-    
-    except HTTPException:
-        # Preserve explicit HTTP errors (like 404)
-        raise
     except Exception as e:
-        print(f"ERROR updating vehicle status: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update vehicle status")
-    
-    # --- Optional: SMS, gated + non-fatal ---
+        # Log but don't break the request
+        print(f"Non-critical ERROR inserting status update record: {e}")
+
+    # ---- NON-CRITICAL: SMS (behind feature flag) ----
     if ENABLE_STATUS_SMS:
         try:
             sms_message = f"Update on your vehicle: {status_update.new_status.replace('_', ' ').title()}"
@@ -233,8 +251,7 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
             sms_result = send_sms(customer_phone, sms_message)
             print(f"DEBUG: Status SMS result for vehicle {vehicle_id}: {sms_result}")
         except Exception as sms_error:
-            # SMS errors are logged but do not affect the API response
-            print(f"SMS notification failed for vehicle {vehicle_id}: {sms_error}")
+            print(f"Non-critical ERROR sending status SMS for vehicle {vehicle_id}: {sms_error}")
     
     return {"success": True, "message": "Status updated successfully"}
 
@@ -251,12 +268,13 @@ async def delete_vehicle(vehicle_id: str):
         supabase.table("service_records").delete().eq("vehicle_id", vehicle_id).execute()
         
         # Delete the vehicle
-        response = supabase.table("vehicles").delete().eq("vehicle_id", vehicle_id).execute()
+        supabase.table("vehicles").delete().eq("vehicle_id", vehicle_id).execute()
         
         return {"success": True, "message": "Vehicle deleted successfully"}
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR deleting vehicle: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete vehicle")
 
 # ==================== MESSAGE ENDPOINTS ====================
 
@@ -275,7 +293,8 @@ async def create_message(vehicle_id: str, message: MessageCreate):
         return response.data[0]
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR creating message: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create message")
 
 @app.get("/vehicles/{vehicle_id}/messages")
 async def get_messages(vehicle_id: str):
@@ -287,7 +306,8 @@ async def get_messages(vehicle_id: str):
         return response.data
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR fetching messages: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch messages")
 
 # ==================== MEDIA ENDPOINTS ====================
 
@@ -310,7 +330,7 @@ async def upload_media(
         unique_filename = f"{vehicle_id}_{uuid.uuid4()}.{file_extension}"
         
         # Upload to Supabase Storage
-        storage_response = supabase.storage.from_('vehicle-photos').upload(
+        supabase.storage.from_('vehicle-photos').upload(
             unique_filename,
             file_content,
             {
@@ -340,7 +360,7 @@ async def upload_media(
     
     except Exception as e:
         print(f"Error uploading media: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to upload media")
 
 @app.get("/vehicles/{vehicle_id}/media")
 async def get_media(vehicle_id: str):
@@ -352,7 +372,8 @@ async def get_media(vehicle_id: str):
         return response.data
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR fetching media: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch media")
 
 # ==================== APPROVAL ENDPOINTS ====================
 
@@ -371,7 +392,8 @@ async def create_approval(vehicle_id: str, approval: ApprovalCreate):
         return response.data[0]
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR creating approval: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create approval")
 
 @app.patch("/approvals/{approval_id}")
 async def respond_to_approval(approval_id: str, response_data: ApprovalResponse):
@@ -379,7 +401,7 @@ async def respond_to_approval(approval_id: str, response_data: ApprovalResponse)
     Customer approves or declines additional work
     """
     try:
-        response = supabase.table("approvals").update({
+        supabase.table("approvals").update({
             "approved": response_data.approved,
             "approved_at": datetime.now().isoformat()
         }).eq("approval_id", approval_id).execute()
@@ -387,7 +409,8 @@ async def respond_to_approval(approval_id: str, response_data: ApprovalResponse)
         return {"success": True, "approved": response_data.approved}
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR responding to approval: {e}")
+        raise HTTPException(status_code=500, detail="Failed to respond to approval")
 
 @app.get("/vehicles/{vehicle_id}/approvals")
 async def get_approvals(vehicle_id: str):
@@ -399,7 +422,8 @@ async def get_approvals(vehicle_id: str):
         return response.data
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR fetching approvals: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch approvals")
 
 # ==================== SERVICE RECORD ENDPOINTS ====================
 
@@ -455,9 +479,11 @@ async def create_service_record(vehicle_id: str, service: ServiceRecordCreate):
         
         return ServiceRecordResponse(**service_data)
     
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"ERROR creating service record: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to create service record")
 
 @app.get("/vehicles/{vehicle_id}/service")
 async def get_service_records(vehicle_id: str):
@@ -469,7 +495,8 @@ async def get_service_records(vehicle_id: str):
         return response.data
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR fetching service records: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch service records")
 
 @app.get("/service-reminders/due")
 async def get_due_reminders():
@@ -485,7 +512,8 @@ async def get_due_reminders():
         return response.data
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR fetching due reminders: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch due reminders")
 
 @app.post("/service-reminders/send")
 async def send_service_reminders():
@@ -527,11 +555,10 @@ async def send_service_reminders():
     
     except Exception as e:
         print(f"ERROR sending reminders: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to send reminders")
 
 # ==================== RUN THE APP ====================
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
