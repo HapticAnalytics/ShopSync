@@ -38,6 +38,11 @@ if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
 else:
     twilio_client = None
 
+# Feature flag: enable/disable status-change SMS notifications
+# Set ENABLE_STATUS_SMS=true in your Render env once A2P is approved
+ENABLE_STATUS_SMS = os.getenv("ENABLE_STATUS_SMS", "false").lower() == "true"
+
+
 def send_sms(to_phone: str, message: str):
     """Send SMS notification to customer"""
     if not twilio_client:
@@ -179,8 +184,13 @@ async def get_shop_vehicles(shop_id: str):
 @app.patch("/vehicles/{vehicle_id}/status")
 async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, user_id: str):
     """
-    Update vehicle status and create an update record
+    Update vehicle status and create an update record.
+
+    - Core DB update should ALWAYS succeed/return correctly if possible.
+    - SMS notifications are optional and controlled by ENABLE_STATUS_SMS.
+    - SMS failures must NEVER break the request.
     """
+    # --- DB work first ---
     try:
         # Get current vehicle data
         vehicle_response = supabase.table("vehicles").select("*").eq("vehicle_id", vehicle_id).execute()
@@ -192,7 +202,7 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
         old_status = current_vehicle["status"]
         
         # Update vehicle status
-        update_response = supabase.table("vehicles").update({
+        supabase.table("vehicles").update({
             "status": status_update.new_status
         }).eq("vehicle_id", vehicle_id).execute()
         
@@ -204,17 +214,29 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
             "new_status": status_update.new_status,
             "message": status_update.message
         }).execute()
-        
-        # Send SMS notification to customer about status change
-        sms_message = f"Update on your vehicle: {status_update.new_status.replace('_', ' ').title()}"
-        if status_update.message:
-            sms_message += f" - {status_update.message}"
-        send_sms(current_vehicle["customer_phone"], sms_message)
-        
-        return {"success": True, "message": "Status updated successfully"}
     
+    except HTTPException:
+        # Preserve explicit HTTP errors (like 404)
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR updating vehicle status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update vehicle status")
+    
+    # --- Optional: SMS, gated + non-fatal ---
+    if ENABLE_STATUS_SMS:
+        try:
+            sms_message = f"Update on your vehicle: {status_update.new_status.replace('_', ' ').title()}"
+            if status_update.message:
+                sms_message += f" - {status_update.message}"
+            
+            customer_phone = current_vehicle.get("customer_phone", "")
+            sms_result = send_sms(customer_phone, sms_message)
+            print(f"DEBUG: Status SMS result for vehicle {vehicle_id}: {sms_result}")
+        except Exception as sms_error:
+            # SMS errors are logged but do not affect the API response
+            print(f"SMS notification failed for vehicle {vehicle_id}: {sms_error}")
+    
+    return {"success": True, "message": "Status updated successfully"}
 
 @app.delete("/vehicles/{vehicle_id}")
 async def delete_vehicle(vehicle_id: str):
@@ -512,3 +534,4 @@ async def send_service_reminders():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
