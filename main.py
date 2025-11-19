@@ -215,6 +215,11 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
             if status_update.new_status == "completed":
                 print(f"DEBUG: Skipping SMS for completed/archived vehicle")
             else:
+                # Get frontend URL and unique link for portal access
+                frontend_url = os.getenv("FRONTEND_URL", "https://frontend-dusky-omega-j8xii0qafc.vercel.app")
+                unique_link = current_vehicle.get("unique_link")
+                portal_url = f"{frontend_url}/track/{unique_link}"
+                
                 # Create status-specific messages
                 status_messages = {
                     "checked_in": f"Hi {customer_name}! Your vehicle has been checked in at Summit Trucks.",
@@ -223,7 +228,7 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
                     "in_progress": f"Update: Your vehicle service is now in progress.",
                     "awaiting_warranty": f"Update: Your vehicle is awaiting warranty approval. We'll keep you posted.",
                     "quality_check": f"Update: Your vehicle is undergoing final quality check.",
-                    "ready": f"Great news! Your vehicle is ready for pickup at Summit Trucks. Thank you for your business!"
+                    "ready": f"Your vehicle is ready for pickup! View details: {portal_url}\n\nPlease leave us a review - it helps us serve you better!"
                 }
                 
                 # Get appropriate message
