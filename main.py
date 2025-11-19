@@ -6,6 +6,7 @@ from typing import List
 import uuid
 from datetime import datetime
 import os
+import re
 from dotenv import load_dotenv
 from twilio.rest import Client
 import requests
@@ -258,18 +259,40 @@ async def toggle_warranty_status(vehicle_id: str):
         
         # Toggle awaiting_warranty flag
         new_warranty_status = not current_vehicle.get("awaiting_warranty", False)
+        current_status = current_vehicle.get("status")
         
         # Update vehicle
         update_data = {
             "awaiting_warranty": new_warranty_status
         }
         
-        # If enabling warranty, set status to awaiting_warranty
+        # If enabling warranty, save current status and set to awaiting_warranty
         if new_warranty_status:
+            # Only save previous status if we're not already in warranty status
+            if current_status != "awaiting_warranty":
+                # Store in notes field temporarily (we'll add proper column later)
+                current_notes = current_vehicle.get("notes", "")
+                update_data["notes"] = f"[STATUS_BEFORE_WARRANTY:{current_status}]{current_notes}"
             update_data["status"] = "awaiting_warranty"
-        # If disabling, move back to in_progress (service continues)
+        # If disabling, restore previous status from notes
         else:
-            update_data["status"] = "in_progress"
+            notes = current_vehicle.get("notes", "")
+            # Try to extract saved status
+            if "[STATUS_BEFORE_WARRANTY:" in notes:
+                import re
+                match = re.search(r'\[STATUS_BEFORE_WARRANTY:(\w+)\]', notes)
+                if match:
+                    previous_status = match.group(1)
+                    # Clean up notes
+                    cleaned_notes = re.sub(r'\[STATUS_BEFORE_WARRANTY:\w+\]', '', notes)
+                    update_data["notes"] = cleaned_notes
+                    update_data["status"] = previous_status
+                else:
+                    # Fallback to in_progress if we can't find it
+                    update_data["status"] = "in_progress"
+            else:
+                # Fallback to in_progress
+                update_data["status"] = "in_progress"
         
         update_response = supabase.table("vehicles").update(update_data).eq("vehicle_id", vehicle_id).execute()
         
