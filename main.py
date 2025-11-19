@@ -273,15 +273,12 @@ async def toggle_warranty_status(vehicle_id: str):
         
         update_response = supabase.table("vehicles").update(update_data).eq("vehicle_id", vehicle_id).execute()
         
-        # Send SMS notification
+        # Send SMS notification only when enabling warranty
         customer_phone = current_vehicle.get("customer_phone")
         customer_name = current_vehicle.get("customer_name", "Customer")
         
-        if customer_phone:
-            if new_warranty_status:
-                sms_message = f"Update: Your vehicle is awaiting warranty approval. We'll notify you once approved and work can continue."
-            else:
-                sms_message = f"Good news! Warranty approved. Your vehicle service is back in progress."
+        if customer_phone and new_warranty_status:
+            sms_message = f"Update: Your vehicle is awaiting warranty approval. We'll notify you once approved and work can continue."
             print(f"DEBUG: Sending warranty status SMS to {customer_phone}")
             send_sms(customer_phone, sms_message)
         
