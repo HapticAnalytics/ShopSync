@@ -131,7 +131,9 @@ async def create_vehicle(vehicle: VehicleCreate, shop_id: str):
         vehicle_data = response.data[0]
         
         # Send SMS notification to customer
-        portal_url = f"https://frontend-e78vqdl1n-logans-projects-ca4dfe96.vercel.app/track/{unique_link}"
+        # Get frontend URL from environment variable or use production URL
+        frontend_url = os.getenv("FRONTEND_URL", "https://frontend-dusky-omega-j8xii0qafc.vercel.app")
+        portal_url = f"{frontend_url}/track/{unique_link}"
         sms_message = f"Hi {vehicle.customer_name}! Your vehicle is checked in at Summit Trucks. Track its status here: {portal_url}"
         print(f"DEBUG: Attempting to send SMS to {vehicle.customer_phone}")
         print(f"DEBUG: Message: {sms_message}")
@@ -209,31 +211,35 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
         customer_name = current_vehicle.get("customer_name", "Customer")
         
         if customer_phone:
-            # Create status-specific messages
-            status_messages = {
-                "checked_in": f"Hi {customer_name}! Your vehicle has been checked in at Summit Trucks.",
-                "inspection": f"Update: Your vehicle is now being inspected.",
-                "waiting_parts": f"Update: Your vehicle is awaiting parts. We'll notify you when work resumes.",
-                "in_progress": f"Update: Your vehicle service is now in progress.",
-                "awaiting_warranty": f"Update: Your vehicle is awaiting warranty approval. We'll keep you posted.",
-                "quality_check": f"Update: Your vehicle is undergoing final quality check.",
-                "ready": f"Great news! Your vehicle is ready for pickup at Summit Trucks. Thank you for your business!"
-            }
-            
-            # Get appropriate message
-            sms_message = status_messages.get(
-                status_update.new_status,
-                f"Update on your vehicle: {status_update.new_status.replace('_', ' ').title()}"
-            )
-            
-            # Add custom message if provided
-            if status_update.message:
-                sms_message += f"\n{status_update.message}"
-            
-            print(f"DEBUG: Attempting to send status update SMS to {customer_phone}")
-            print(f"DEBUG: Message: {sms_message}")
-            result = send_sms(customer_phone, sms_message)
-            print(f"DEBUG: SMS send result: {result}")
+            # Don't send SMS for "completed" status (archiving)
+            if status_update.new_status == "completed":
+                print(f"DEBUG: Skipping SMS for completed/archived vehicle")
+            else:
+                # Create status-specific messages
+                status_messages = {
+                    "checked_in": f"Hi {customer_name}! Your vehicle has been checked in at Summit Trucks.",
+                    "inspection": f"Update: Your vehicle is now being inspected.",
+                    "waiting_parts": f"Update: Your vehicle is awaiting parts. We'll notify you when work resumes.",
+                    "in_progress": f"Update: Your vehicle service is now in progress.",
+                    "awaiting_warranty": f"Update: Your vehicle is awaiting warranty approval. We'll keep you posted.",
+                    "quality_check": f"Update: Your vehicle is undergoing final quality check.",
+                    "ready": f"Great news! Your vehicle is ready for pickup at Summit Trucks. Thank you for your business!"
+                }
+                
+                # Get appropriate message
+                sms_message = status_messages.get(
+                    status_update.new_status,
+                    f"Update on your vehicle: {status_update.new_status.replace('_', ' ').title()}"
+                )
+                
+                # Add custom message if provided
+                if status_update.message:
+                    sms_message += f"\n{status_update.message}"
+                
+                print(f"DEBUG: Attempting to send status update SMS to {customer_phone}")
+                print(f"DEBUG: Message: {sms_message}")
+                result = send_sms(customer_phone, sms_message)
+                print(f"DEBUG: SMS send result: {result}")
         else:
             print(f"WARNING: No customer phone number found for vehicle {vehicle_id}")
         
