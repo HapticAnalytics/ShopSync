@@ -264,10 +264,10 @@ async def toggle_warranty_status(vehicle_id: str):
             "awaiting_warranty": new_warranty_status
         }
         
-        # If enabling warranty, also set status to awaiting_warranty
+        # If enabling warranty, set status to awaiting_warranty
         if new_warranty_status:
             update_data["status"] = "awaiting_warranty"
-        # If disabling, move back to in_progress
+        # If disabling, move back to in_progress (service continues)
         else:
             update_data["status"] = "in_progress"
         
@@ -277,8 +277,11 @@ async def toggle_warranty_status(vehicle_id: str):
         customer_phone = current_vehicle.get("customer_phone")
         customer_name = current_vehicle.get("customer_name", "Customer")
         
-        if customer_phone and new_warranty_status:
-            sms_message = f"Update: Your vehicle is awaiting warranty approval. We'll notify you once approved and work can continue."
+        if customer_phone:
+            if new_warranty_status:
+                sms_message = f"Update: Your vehicle is awaiting warranty approval. We'll notify you once approved and work can continue."
+            else:
+                sms_message = f"Good news! Warranty approved. Your vehicle service is back in progress."
             print(f"DEBUG: Sending warranty status SMS to {customer_phone}")
             send_sms(customer_phone, sms_message)
         
