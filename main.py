@@ -316,7 +316,10 @@ async def admin_invite_user(invite: UserInvite, admin: dict = Depends(require_ad
             detail="User invite requires SUPABASE_SERVICE_ROLE_KEY to be configured.",
         )
     try:
-        res = supabase_admin.auth.admin.invite_user_by_email(invite.email)
+        res = supabase_admin.auth.admin.invite_user_by_email(
+            invite.email,
+            options={"redirect_to": f"{PORTAL_URL}/accept-invite"},
+        )
         user_id = str(res.user.id)
 
         supabase.table("users").insert({
