@@ -354,6 +354,12 @@ const AdvisorDashboard = () => {
               <p className="text-xs sm:text-sm text-gray-500 mt-2 font-normal">{shopInfo.name} · {vehicles.length} Active</p>
             </div>
             <div className="flex items-center gap-3">
+              <button
+                onClick={() => navigate('/appointments')}
+                className="px-4 py-2.5 bg-gray-100 text-gray-700 text-sm font-medium rounded-full hover:bg-gray-200 transition-all"
+              >
+                Appointments
+              </button>
               {isAdmin && (
                 <button
                   onClick={() => navigate('/admin')}

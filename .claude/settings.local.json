@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"C:\\\\Users\\\\Logan\\\\ShopSync\" 2>/dev/null && echo \"EXISTS: ShopSync\" || echo \"NOT FOUND: ShopSync\" *)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\Logan\\\\ShopSync\\\\backend\" -Recurse -Depth 1 | Where-Object { -not $_.PSIsContainer -and $_.DirectoryName -eq \"C:\\\\Users\\\\Logan\\\\ShopSync\\\\backend\" } | Select-Object Name, Length)",
+      "Bash(grep -E \"dist-info$\")",
+      "Bash(grep -Ev \"^\\(pip|setuptools|pkg_resources|wheel\\)$\")",
+      "Bash(vercel --version)",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git fetch *)",
+      "Bash(git reset *)",
+      "Bash(git ls-tree *)",
+      "Bash(git add *)",
+      "Bash(vercel --prod)",
+      "Bash(vercel ls *)",
+      "Bash(vercel inspect *)",
+      "Bash(npm install *)",
+      "Bash(cp backend/main.py main.py)",
+      "Bash(cp backend/schemas.py schemas.py)",
+      "Bash(cp backend/database.py database.py)",
+      "Bash(cp backend/auth.py auth.py)",
+      "Bash(cp backend/requirements.txt requirements.txt)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(vercel alias *)"
+    ]
+  }
+}

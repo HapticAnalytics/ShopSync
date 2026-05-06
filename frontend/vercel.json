@@ -1,0 +1,9 @@
+{
+  "alias": ["shopsync-haptic.vercel.app"],
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
