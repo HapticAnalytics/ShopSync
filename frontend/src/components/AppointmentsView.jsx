@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 
-const API = import.meta.env.VITE_API_URL || 'https://shopsync-api.vercel.app';
+const API = import.meta.env.VITE_API_BASE || 'https://shopsync-backend-w8ja.onrender.com';
 
 const STATUS_LABEL = {
   scheduled: 'Scheduled',
