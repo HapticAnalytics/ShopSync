@@ -442,12 +442,6 @@ export default function AppointmentsView() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={copyLink}
-              className="hidden sm:block text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-600 hover:border-black hover:text-black transition-colors"
-            >
-              Online Booking Link
-            </button>
-            <button
               onClick={() => setShowModal(true)}
               className="bg-black text-white text-sm font-medium rounded-xl px-4 py-2 hover:bg-gray-800 transition-colors"
             >
