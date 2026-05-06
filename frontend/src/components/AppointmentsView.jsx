@@ -373,9 +373,9 @@ export default function AppointmentsView() {
   const shopId = userProfile?.shop_id || '';
 
   const [appointments, setAppointments] = useState([]);
+  const [dismissed, setDismissed] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [filter, setFilter] = useState('upcoming');
   const [actionLoading, setActionLoading] = useState(null);
 
   const authConfig = useCallback(() => ({
@@ -406,24 +406,20 @@ export default function AppointmentsView() {
       setAppointments(prev => prev.map(a =>
         (a.appointment_id === aptId || a.id === aptId) ? { ...a, status: newStatus } : a
       ));
+      if (['cancelled', 'completed', 'no_show'].includes(newStatus)) {
+        setDismissed(prev => new Set([...prev, aptId]));
+      }
     } catch { /* ignore */ }
     finally { setActionLoading(null); }
   }
 
-  const now = new Date();
-
-  const filtered = appointments.filter(apt => {
-    const aptDate = new Date(apt.scheduled_at);
-    if (filter === 'upcoming') return ['scheduled', 'confirmed'].includes(apt.status) && aptDate >= now;
-    if (filter === 'today') {
-      const today = new Date(); today.setHours(0,0,0,0);
-      const tomorrow = new Date(today); tomorrow.setDate(today.getDate()+1);
-      return aptDate >= today && aptDate < tomorrow;
-    }
-    return true;
+  const active = appointments.filter(apt => {
+    const aptId = apt.appointment_id || apt.id;
+    if (dismissed.has(aptId)) return false;
+    return ['scheduled', 'confirmed'].includes(apt.status);
   });
 
-  const grouped = groupByDate(filtered);
+  const grouped = groupByDate(active);
 
   if (!shopId) {
     return (
@@ -462,25 +458,6 @@ export default function AppointmentsView() {
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-5">
-        {/* Filter tabs */}
-        <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit mb-5">
-          {[
-            { key: 'upcoming', label: 'Upcoming' },
-            { key: 'today',    label: 'Today' },
-            { key: 'all',      label: 'All' },
-          ].map(f => (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                filter === f.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-
         {loading ? (
           <div className="flex justify-center py-16">
             <div className="w-6 h-6 border-2 border-gray-200 border-t-black rounded-full animate-spin" />

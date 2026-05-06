@@ -899,13 +899,13 @@ async def create_advisor_appointment(
             str(data.vehicle_year) if data.vehicle_year else None,
             data.vehicle_make, data.vehicle_model,
         ] if p]
-        sms_lines = [f"Hi {data.first_name}! Your drop-off at {shop['name']} is confirmed for {formatted_time}."]
-        if vehicle_parts:
-            sms_lines.append(f"Vehicle: {' '.join(vehicle_parts)}.")
-        if data.drop_off_reason:
-            sms_lines.append(f"Reason: {data.drop_off_reason}.")
-        sms_lines.append("Reply STOP to opt out.")
-        send_sms(data.customer_phone, " ".join(sms_lines))
+        vehicle_str = " ".join(vehicle_parts) if vehicle_parts else "vehicle"
+        sms_body = (
+            f"Hi {data.first_name}! Your drop off for {shop['name']} is confirmed for "
+            f"{formatted_time}. Thanks for trusting us with your {vehicle_str}. "
+            f"Have a nice day! Reply STOP to opt out."
+        )
+        send_sms(data.customer_phone, sms_body)
 
         logger.info(f"Advisor appointment created: {data.first_name} {data.last_name} at {scheduled_dt.isoformat()}")
         return {"appointment": apt, "customer_id": customer_id}
