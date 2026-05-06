@@ -114,3 +114,53 @@ class VehicleResponse(BaseModel):
 class StatusResponse(BaseModel):
     success: bool
     message: str
+
+
+class ShopCreate(BaseModel):
+    name: str
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    google_review_url: Optional[str] = None
+    timezone: str = "America/Denver"
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("name cannot be empty")
+        return v
+
+
+class UserInvite(BaseModel):
+    email: str
+    full_name: Optional[str] = None
+    role: str = "advisor"
+    shop_id: Optional[str] = None
+
+    @field_validator("role")
+    @classmethod
+    def role_must_be_valid(cls, v):
+        if v not in {"admin", "advisor"}:
+            raise ValueError("role must be 'admin' or 'advisor'")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def email_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("email cannot be empty")
+        return v.strip().lower()
+
+
+class UserUpdate(BaseModel):
+    role: Optional[str] = None
+    shop_id: Optional[str] = None
+    active: Optional[bool] = None
+    full_name: Optional[str] = None
+
+    @field_validator("role")
+    @classmethod
+    def role_must_be_valid(cls, v):
+        if v is not None and v not in {"admin", "advisor"}:
+            raise ValueError("role must be 'admin' or 'advisor'")
+        return v

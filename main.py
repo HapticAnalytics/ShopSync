@@ -2,17 +2,21 @@ import logging
 import os
 import uuid
 from datetime import datetime
+from typing import Optional
 
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import Depends, FastAPI, HTTPException, Security, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from twilio.rest import Client
 
-from database import get_supabase_client
+from auth import get_current_user, require_admin, bearer_scheme
+from database import get_supabase_client, get_admin_client
 from schemas import (
     VehicleCreate, VehicleResponse, StatusUpdate, MessageCreate,
-    ApprovalCreate, ApprovalResponse, ALLOWED_MIME_TYPES, MAX_UPLOAD_BYTES,
+    ApprovalCreate, ApprovalResponse, ShopCreate, UserInvite, UserUpdate,
+    ALLOWED_MIME_TYPES, MAX_UPLOAD_BYTES,
 )
 
 load_dotenv()
@@ -25,7 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("shopsync")
 
-# ── Config from env ───────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 PORTAL_URL = os.getenv("PORTAL_URL", "").rstrip("/")
 SHOP_NAME = os.getenv("SHOP_NAME", "Summit Trucks")
 GOOGLE_REVIEW_URL = os.getenv("GOOGLE_REVIEW_URL", "")
@@ -35,7 +39,7 @@ _raw_origins = os.getenv("ALLOWED_ORIGINS", "")
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()] or ["*"]
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="ShopSync API", version="1.0.0")
+app = FastAPI(title="ShopSync API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,7 +68,6 @@ else:
 
 def send_sms(to_phone: str, message: str) -> bool:
     if not twilio_client:
-        logger.info("sms_skipped", extra={"to": to_phone, "reason": "not_configured"})
         return False
     try:
         kwargs = {"body": message, "to": to_phone}
@@ -81,7 +84,6 @@ def send_sms(to_phone: str, message: str) -> bool:
 
 
 def _shop_sms_name(shop_id: str) -> str:
-    """Best-effort shop name lookup; falls back to env var."""
     try:
         resp = supabase.table("shops").select("name").eq("shop_id", shop_id).execute()
         if resp.data:
@@ -91,23 +93,15 @@ def _shop_sms_name(shop_id: str) -> str:
     return SHOP_NAME
 
 
-def get_car_image(make, model, year):
-    if not UNSPLASH_ACCESS_KEY:
-        return None
-    try:
-        resp = requests.get(
-            "https://api.unsplash.com/search/photos",
-            params={"query": f"{year} {make} {model} car", "per_page": 1, "orientation": "landscape"},
-            headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            if data["results"]:
-                return data["results"][0]["urls"]["regular"]
-    except Exception as e:
-        logger.warning(f"Unsplash fetch failed: {e}")
-    return None
+def _verify_vehicle_access(vehicle_id: str, user: dict) -> dict:
+    """Fetch vehicle and verify the user's shop matches. Returns vehicle dict."""
+    resp = supabase.table("vehicles").select("*").eq("vehicle_id", vehicle_id).execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    vehicle = resp.data[0]
+    if user["role"] != "admin" and vehicle.get("shop_id") != user.get("shop_id"):
+        raise HTTPException(status_code=403, detail="Access denied to this vehicle")
+    return vehicle
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -119,44 +113,48 @@ async def health_check():
         supabase.table("vehicles").select("vehicle_id").limit(1).execute()
         db_ok = True
     except Exception as e:
-        logger.error(f"Health check DB error: {e}")
+        logger.error(f"Health DB error: {e}")
 
     return {
         "status": "ok" if db_ok else "degraded",
         "database": "ok" if db_ok else "error",
         "twilio": "configured" if twilio_client else "not_configured",
         "portal_url": PORTAL_URL or "NOT SET — SMS links will be broken",
+        "admin_client": "configured" if get_admin_client() else "not_configured",
     }
 
 
-# ── Root ──────────────────────────────────────────────────────────────────────
-
 @app.get("/")
 async def root():
-    return {"message": "ShopSync API is running", "version": "1.0.0"}
+    return {"message": "ShopSync API is running", "version": "2.0.0"}
 
 
-# ── Shop endpoints ─────────────────────────────────────────────────────────────
+# ── Me ────────────────────────────────────────────────────────────────────────
+
+@app.get("/me")
+async def get_me(user: dict = Depends(get_current_user)):
+    return user
+
+
+# ── Shop endpoints (public branding) ─────────────────────────────────────────
 
 @app.get("/shop/{shop_id}")
 async def get_shop(shop_id: str):
-    """Return shop branding info. Falls back to env vars if no shops table exists yet."""
     try:
         resp = supabase.table("shops").select("*").eq("shop_id", shop_id).execute()
         if resp.data:
             return resp.data[0]
     except Exception:
         pass
-    # Graceful fallback — shops table may not exist yet
-    return {
-        "shop_id": shop_id,
-        "name": SHOP_NAME,
-        "google_review_url": GOOGLE_REVIEW_URL,
-    }
+    return {"shop_id": shop_id, "name": SHOP_NAME, "google_review_url": GOOGLE_REVIEW_URL}
 
+
+# ── Shop endpoints (auth required) ────────────────────────────────────────────
 
 @app.get("/shop/{shop_id}/vehicles")
-async def get_shop_vehicles(shop_id: str):
+async def get_shop_vehicles(shop_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin" and user.get("shop_id") != shop_id:
+        raise HTTPException(status_code=403, detail="Access denied to this shop's data")
     try:
         resp = supabase.table("vehicles").select("*").eq("shop_id", shop_id).execute()
         return resp.data
@@ -168,13 +166,17 @@ async def get_shop_vehicles(shop_id: str):
 
 
 @app.get("/shop/{shop_id}/dashboard-summary")
-async def get_dashboard_summary(shop_id: str):
-    """
-    Single endpoint that replaces the N+1 polling pattern in the advisor dashboard.
-    Returns all active vehicles with their message counts, approvals, and vehicle photos.
-    """
+async def get_dashboard_summary(shop_id: str, user: dict = Depends(get_current_user)):
+    if user["role"] != "admin" and user.get("shop_id") != shop_id:
+        raise HTTPException(status_code=403, detail="Access denied to this shop's data")
     try:
-        vehicles_resp = supabase.table("vehicles").select("*").eq("shop_id", shop_id).neq("status", "completed").execute()
+        vehicles_resp = (
+            supabase.table("vehicles")
+            .select("*")
+            .eq("shop_id", shop_id)
+            .neq("status", "completed")
+            .execute()
+        )
         vehicles = vehicles_resp.data
 
         if not vehicles:
@@ -184,7 +186,13 @@ async def get_dashboard_summary(shop_id: str):
 
         messages_resp = supabase.table("messages").select("vehicle_id,sender_type").in_("vehicle_id", vehicle_ids).execute()
         approvals_resp = supabase.table("approvals").select("*").in_("vehicle_id", vehicle_ids).execute()
-        photos_resp = supabase.table("media").select("vehicle_id,media_url,caption").in_("vehicle_id", vehicle_ids).eq("caption", "vehicle_photo").execute()
+        photos_resp = (
+            supabase.table("media")
+            .select("vehicle_id,media_url,caption")
+            .in_("vehicle_id", vehicle_ids)
+            .eq("caption", "vehicle_photo")
+            .execute()
+        )
 
         message_counts: dict = {}
         for msg in messages_resp.data:
@@ -212,10 +220,107 @@ async def get_dashboard_summary(shop_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Admin endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/admin/shops")
+async def admin_create_shop(shop: ShopCreate, admin: dict = Depends(require_admin)):
+    try:
+        resp = supabase.table("shops").insert({
+            "name": shop.name,
+            "phone": shop.phone,
+            "address": shop.address,
+            "google_review_url": shop.google_review_url,
+            "timezone": shop.timezone,
+        }).execute()
+        return resp.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"admin_create_shop error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/shops")
+async def admin_list_shops(admin: dict = Depends(require_admin)):
+    try:
+        resp = supabase.table("shops").select("*").order("created_at").execute()
+        return resp.data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"admin_list_shops error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/users/invite")
+async def admin_invite_user(invite: UserInvite, admin: dict = Depends(require_admin)):
+    supabase_admin = get_admin_client()
+    if not supabase_admin:
+        raise HTTPException(
+            status_code=501,
+            detail="User invite requires SUPABASE_SERVICE_ROLE_KEY to be configured on the server.",
+        )
+    try:
+        res = supabase_admin.auth.admin.invite_user_by_email(invite.email)
+        user_id = str(res.user.id)
+
+        supabase.table("users").insert({
+            "user_id": user_id,
+            "email": invite.email,
+            "full_name": invite.full_name,
+            "role": invite.role,
+            "shop_id": invite.shop_id or None,
+        }).execute()
+
+        logger.info(f"Invited user {invite.email} as {invite.role}")
+        return {"success": True, "user_id": user_id, "email": invite.email}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"admin_invite_user error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/users")
+async def admin_list_users(admin: dict = Depends(require_admin)):
+    try:
+        resp = supabase.table("users").select("*").order("created_at").execute()
+        return resp.data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"admin_list_users error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/admin/users/{user_id}")
+async def admin_update_user(user_id: str, update: UserUpdate, admin: dict = Depends(require_admin)):
+    try:
+        patch = {k: v for k, v in update.model_dump().items() if v is not None}
+        # Explicitly allow setting active=False and shop_id=None
+        if update.active is not None:
+            patch["active"] = update.active
+        if "shop_id" in update.model_dump(exclude_unset=False):
+            patch["shop_id"] = update.shop_id
+
+        resp = supabase.table("users").update(patch).eq("user_id", user_id).execute()
+        if not resp.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        return resp.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"admin_update_user error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Vehicle endpoints ──────────────────────────────────────────────────────────
 
 @app.post("/vehicles/", response_model=VehicleResponse)
-async def create_vehicle(vehicle: VehicleCreate, shop_id: str):
+async def create_vehicle(vehicle: VehicleCreate, user: dict = Depends(get_current_user)):
+    shop_id = user.get("shop_id")
+    if not shop_id:
+        raise HTTPException(status_code=400, detail="Your account is not assigned to a shop. Contact your administrator.")
     try:
         unique_link = str(uuid.uuid4())
 
@@ -242,11 +347,11 @@ async def create_vehicle(vehicle: VehicleCreate, shop_id: str):
         if PORTAL_URL:
             tracking_url = f"{PORTAL_URL}/track/{unique_link}"
             shop_name = _shop_sms_name(shop_id)
-            sms_message = (
+            send_sms(
+                vehicle.customer_phone,
                 f"Hi {vehicle.customer_name}! Your vehicle is checked in at {shop_name}. "
-                f"Track its status here: {tracking_url}"
+                f"Track its status here: {tracking_url}",
             )
-            send_sms(vehicle.customer_phone, sms_message)
         else:
             logger.warning("PORTAL_URL not set — skipping check-in SMS")
 
@@ -274,13 +379,13 @@ async def get_vehicle_by_link(unique_link: str):
 
 
 @app.patch("/vehicles/{vehicle_id}/status")
-async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, user_id: str):
+async def update_vehicle_status(
+    vehicle_id: str,
+    status_update: StatusUpdate,
+    user: dict = Depends(get_current_user),
+):
     try:
-        vehicle_resp = supabase.table("vehicles").select("*").eq("vehicle_id", vehicle_id).execute()
-        if not vehicle_resp.data:
-            raise HTTPException(status_code=404, detail="Vehicle not found")
-
-        current_vehicle = vehicle_resp.data[0]
+        current_vehicle = _verify_vehicle_access(vehicle_id, user)
         old_status = current_vehicle["status"]
 
         supabase.table("vehicles").update({"status": status_update.new_status}).eq("vehicle_id", vehicle_id).execute()
@@ -288,17 +393,16 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
         try:
             supabase.table("updates").insert({
                 "vehicle_id": vehicle_id,
-                "user_id": user_id,
+                "user_id": user["user_id"],
                 "old_status": old_status,
                 "new_status": status_update.new_status,
                 "message": status_update.message,
             }).execute()
-        except Exception as update_err:
-            logger.warning(f"Non-critical: failed to insert status update record: {update_err}")
+        except Exception as err:
+            logger.warning(f"Non-critical: failed to insert status update record: {err}")
 
-        # No SMS when archiving
         if status_update.new_status == "completed":
-            return {"success": True, "message": "Status updated successfully"}
+            return {"success": True, "message": "Vehicle archived"}
 
         customer_phone = current_vehicle.get("customer_phone")
         customer_name = current_vehicle.get("customer_name", "Customer")
@@ -333,13 +437,9 @@ async def update_vehicle_status(vehicle_id: str, status_update: StatusUpdate, us
 
 
 @app.patch("/vehicles/{vehicle_id}/toggle-warranty")
-async def toggle_warranty_status(vehicle_id: str):
+async def toggle_warranty_status(vehicle_id: str, user: dict = Depends(get_current_user)):
     try:
-        vehicle_resp = supabase.table("vehicles").select("*").eq("vehicle_id", vehicle_id).execute()
-        if not vehicle_resp.data:
-            raise HTTPException(status_code=404, detail="Vehicle not found")
-
-        current_vehicle = vehicle_resp.data[0]
+        current_vehicle = _verify_vehicle_access(vehicle_id, user)
         new_warranty_status = not current_vehicle.get("awaiting_warranty", False)
 
         update_data = {
@@ -367,7 +467,14 @@ async def toggle_warranty_status(vehicle_id: str):
 # ── Message endpoints ──────────────────────────────────────────────────────────
 
 @app.post("/vehicles/{vehicle_id}/messages")
-async def create_message(vehicle_id: str, message: MessageCreate):
+async def create_message(
+    vehicle_id: str,
+    message: MessageCreate,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme),
+):
+    # Advisor messages require authentication; customer messages are public
+    if message.sender_type == "advisor" and not credentials:
+        raise HTTPException(status_code=401, detail="Authentication required for advisor messages")
     try:
         resp = supabase.table("messages").insert({
             "vehicle_id": vehicle_id,
@@ -400,18 +507,15 @@ async def get_messages(vehicle_id: str):
 async def upload_media(
     vehicle_id: str,
     file: UploadFile = File(...),
-    user_id: str = None,
     caption: str = None,
+    user: dict = Depends(get_current_user),
 ):
     try:
-        # MIME-type guard
-        if file.content_type not in ALLOWED_MIME_TYPES:
-            raise HTTPException(
-                status_code=415,
-                detail=f"File type '{file.content_type}' is not allowed.",
-            )
+        current_vehicle = _verify_vehicle_access(vehicle_id, user)
 
-        # Size guard — read one byte past the limit to detect oversized files
+        if file.content_type not in ALLOWED_MIME_TYPES:
+            raise HTTPException(status_code=415, detail=f"File type '{file.content_type}' is not allowed.")
+
         file_content = await file.read(MAX_UPLOAD_BYTES + 1)
         if len(file_content) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="File exceeds the 50 MB upload limit.")
@@ -429,13 +533,13 @@ async def upload_media(
 
         media_resp = supabase.table("media").insert({
             "vehicle_id": vehicle_id,
-            "user_id": user_id,
+            "user_id": user["user_id"],
             "media_type": "photo" if (file.content_type or "").startswith("image") else "video",
             "media_url": public_url,
             "caption": caption,
         }).execute()
 
-        logger.info(f"Media uploaded: {public_url}")
+        logger.info(f"Media uploaded: {public_url} for vehicle {vehicle_id}")
         return {"success": True, "media_url": public_url, "media_id": media_resp.data[0]["media_id"]}
 
     except HTTPException:
@@ -460,8 +564,13 @@ async def get_media(vehicle_id: str):
 # ── Approval endpoints ─────────────────────────────────────────────────────────
 
 @app.post("/vehicles/{vehicle_id}/approvals")
-async def create_approval(vehicle_id: str, approval: ApprovalCreate):
+async def create_approval(
+    vehicle_id: str,
+    approval: ApprovalCreate,
+    user: dict = Depends(get_current_user),
+):
     try:
+        _verify_vehicle_access(vehicle_id, user)
         resp = supabase.table("approvals").insert({
             "vehicle_id": vehicle_id,
             "description": approval.description,
