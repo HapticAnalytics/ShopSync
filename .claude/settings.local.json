@@ -23,7 +23,9 @@
       "Bash(cp backend/requirements.txt requirements.txt)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(vercel alias *)"
+      "Bash(vercel alias *)",
+      "Bash(vercel --prod --yes)",
+      "Bash(git commit -m 'Rebuild appointment scheduler: advisor-driven booking, customer profiles, vehicle capture *)"
     ]
   }
 }

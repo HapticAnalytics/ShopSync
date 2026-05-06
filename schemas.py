@@ -227,3 +227,50 @@ class UserUpdate(BaseModel):
         if v is not None and v not in {"admin", "advisor"}:
             raise ValueError("role must be 'admin' or 'advisor'")
         return v
+
+
+class AdvisorAppointmentCreate(BaseModel):
+    first_name: str
+    last_name: str
+    customer_phone: str
+    customer_email: Optional[str] = None
+    vehicle_year: Optional[int] = None
+    vehicle_make: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    vehicle_vin: Optional[str] = None
+    drop_off_reason: Optional[str] = None
+    scheduled_at: str  # "YYYY-MM-DDTHH:MM" treated as shop local time
+    duration_minutes: int = 60
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def name_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("Name fields cannot be empty")
+        return v.strip()
+
+    @field_validator("customer_phone")
+    @classmethod
+    def phone_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("customer_phone cannot be empty")
+        return v.strip()
+
+    @field_validator("vehicle_year")
+    @classmethod
+    def year_sane(cls, v):
+        if v is not None and not (1900 <= v <= 2100):
+            raise ValueError("year must be between 1900 and 2100")
+        return v
+
+    @field_validator("vehicle_vin")
+    @classmethod
+    def vin_upper(cls, v):
+        return v.strip().upper() if v else v
+
+    @field_validator("duration_minutes")
+    @classmethod
+    def duration_positive(cls, v):
+        if not (1 <= v <= 480):
+            raise ValueError("duration_minutes must be 1–480")
+        return v

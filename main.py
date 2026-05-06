@@ -17,7 +17,8 @@ from database import get_supabase_client, get_admin_client
 from schemas import (
     VehicleCreate, VehicleResponse, StatusUpdate, MessageCreate,
     ApprovalCreate, ApprovalResponse, ShopCreate, UserInvite, UserUpdate,
-    AppointmentCreate, AppointmentStatusUpdate, ShopHourEntry, BlockDateCreate,
+    AppointmentCreate, AppointmentStatusUpdate, AdvisorAppointmentCreate,
+    ShopHourEntry, BlockDateCreate,
     ALLOWED_MIME_TYPES, MAX_UPLOAD_BYTES,
 )
 
@@ -823,6 +824,185 @@ async def book_appointment(shop_id: str, appointment: AppointmentCreate):
 
 # ── Appointment endpoints (auth required) ──────────────────────────────────────
 
+@app.post("/shop/{shop_id}/appointments")
+async def create_advisor_appointment(
+    shop_id: str,
+    data: AdvisorAppointmentCreate,
+    user: dict = Depends(get_current_user),
+):
+    if user["role"] != "admin" and user.get("shop_id") != shop_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        shop_resp = supabase.table("shops").select("name,timezone,phone").eq("shop_id", shop_id).execute()
+        if not shop_resp.data:
+            raise HTTPException(status_code=404, detail="Shop not found")
+        shop = shop_resp.data[0]
+        tz = _get_tz(shop.get("timezone", "America/Denver"))
+
+        try:
+            scheduled_dt = datetime.fromisoformat(data.scheduled_at)
+            if scheduled_dt.tzinfo is None:
+                scheduled_dt = scheduled_dt.replace(tzinfo=tz)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid scheduled_at format. Use YYYY-MM-DDTHH:MM.")
+
+        # Upsert customer
+        cust_resp = (
+            supabase.table("customers")
+            .select("id")
+            .eq("shop_id", shop_id)
+            .eq("phone", data.customer_phone)
+            .execute()
+        )
+        if cust_resp.data:
+            customer_id = cust_resp.data[0]["id"]
+            supabase.table("customers").update({
+                "first_name": data.first_name,
+                "last_name": data.last_name,
+                "email": data.customer_email,
+                "updated_at": datetime.now(ZoneInfo("UTC")).isoformat(),
+            }).eq("id", customer_id).execute()
+        else:
+            ins = supabase.table("customers").insert({
+                "shop_id": shop_id,
+                "first_name": data.first_name,
+                "last_name": data.last_name,
+                "phone": data.customer_phone,
+                "email": data.customer_email,
+            }).execute()
+            customer_id = ins.data[0]["id"]
+
+        apt_resp = supabase.table("appointments").insert({
+            "shop_id": shop_id,
+            "customer_id": customer_id,
+            "customer_name": f"{data.first_name} {data.last_name}",
+            "first_name": data.first_name,
+            "last_name": data.last_name,
+            "customer_phone": data.customer_phone,
+            "customer_email": data.customer_email,
+            "vehicle_year": data.vehicle_year,
+            "vehicle_make": data.vehicle_make,
+            "vehicle_model": data.vehicle_model,
+            "vehicle_vin": data.vehicle_vin,
+            "drop_off_reason": data.drop_off_reason,
+            "service_type": data.drop_off_reason,
+            "scheduled_at": scheduled_dt.isoformat(),
+            "duration_minutes": data.duration_minutes,
+            "status": "scheduled",
+        }).execute()
+
+        apt = apt_resp.data[0]
+
+        local_dt = scheduled_dt.astimezone(tz)
+        formatted_time = local_dt.strftime("%A, %B %-d at %-I:%M %p")
+        vehicle_parts = [p for p in [
+            str(data.vehicle_year) if data.vehicle_year else None,
+            data.vehicle_make, data.vehicle_model,
+        ] if p]
+        sms_lines = [f"Hi {data.first_name}! Your drop-off at {shop['name']} is confirmed for {formatted_time}."]
+        if vehicle_parts:
+            sms_lines.append(f"Vehicle: {' '.join(vehicle_parts)}.")
+        if data.drop_off_reason:
+            sms_lines.append(f"Reason: {data.drop_off_reason}.")
+        sms_lines.append("Reply STOP to opt out.")
+        send_sms(data.customer_phone, " ".join(sms_lines))
+
+        logger.info(f"Advisor appointment created: {data.first_name} {data.last_name} at {scheduled_dt.isoformat()}")
+        return {"appointment": apt, "customer_id": customer_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"create_advisor_appointment error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/shop/{shop_id}/customers/search")
+async def search_customers(
+    shop_id: str,
+    q: str = "",
+    user: dict = Depends(get_current_user),
+):
+    if user["role"] != "admin" and user.get("shop_id") != shop_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    q = q.strip()
+    if len(q) < 2:
+        return {"customers": []}
+    try:
+        results: list[dict] = []
+        seen: set[str] = set()
+
+        is_phone_like = all(c in "0123456789-+(). " for c in q)
+
+        if is_phone_like:
+            resp = (
+                supabase.table("customers")
+                .select("*")
+                .eq("shop_id", shop_id)
+                .ilike("phone", f"%{q}%")
+                .limit(8)
+                .execute()
+            )
+            for c in (resp.data or []):
+                if c["id"] not in seen:
+                    seen.add(c["id"])
+                    results.append(c)
+        else:
+            for col in ("first_name", "last_name"):
+                resp = (
+                    supabase.table("customers")
+                    .select("*")
+                    .eq("shop_id", shop_id)
+                    .ilike(col, f"%{q}%")
+                    .limit(6)
+                    .execute()
+                )
+                for c in (resp.data or []):
+                    if c["id"] not in seen:
+                        seen.add(c["id"])
+                        results.append(c)
+
+        # VIN search — find customer_ids from appointments
+        if len(q) >= 4:
+            vin_resp = (
+                supabase.table("appointments")
+                .select("customer_id,vehicle_year,vehicle_make,vehicle_model,vehicle_vin")
+                .eq("shop_id", shop_id)
+                .ilike("vehicle_vin", f"%{q.upper()}%")
+                .limit(5)
+                .execute()
+            )
+            vin_customer_ids = [r["customer_id"] for r in (vin_resp.data or []) if r.get("customer_id") and r["customer_id"] not in seen]
+            if vin_customer_ids:
+                for cid in vin_customer_ids:
+                    cr = supabase.table("customers").select("*").eq("id", cid).execute()
+                    for c in (cr.data or []):
+                        if c["id"] not in seen:
+                            seen.add(c["id"])
+                            results.append(c)
+
+        # Attach most recent vehicle to each customer
+        for customer in results:
+            apt_resp = (
+                supabase.table("appointments")
+                .select("vehicle_year,vehicle_make,vehicle_model,vehicle_vin")
+                .eq("customer_id", customer["id"])
+                .not_.is_("vehicle_make", "null")
+                .order("scheduled_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            customer["last_vehicle"] = apt_resp.data[0] if apt_resp.data else None
+
+        return {"customers": results[:8]}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"search_customers error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/shop/{shop_id}/appointments")
 async def get_shop_appointments(shop_id: str, user: dict = Depends(get_current_user)):
     if user["role"] != "admin" and user.get("shop_id") != shop_id:
@@ -835,7 +1015,7 @@ async def get_shop_appointments(shop_id: str, user: dict = Depends(get_current_u
             .order("scheduled_at")
             .execute()
         )
-        return resp.data
+        return {"appointments": resp.data or []}
     except HTTPException:
         raise
     except Exception as e:
