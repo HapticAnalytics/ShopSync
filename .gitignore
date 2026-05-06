@@ -1,0 +1,17 @@
+# Python (root = backend)
+venv/
+backend/venv/
+__pycache__/
+backend/__pycache__/
+*.pyc
+.env
+
+# Frontend (deployed via Vercel CLI, not GitHub)
+frontend/node_modules/
+frontend/dist/
+frontend/.vercel/
+frontend/.env
+
+# OS
+.DS_Store
+Thumbs.db
