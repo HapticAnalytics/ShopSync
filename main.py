@@ -18,11 +18,19 @@ from schemas import (
     VehicleCreate, VehicleResponse, StatusUpdate, MessageCreate,
     ApprovalCreate, ApprovalResponse, ShopCreate, UserInvite, UserUpdate,
     AppointmentCreate, AppointmentStatusUpdate, AdvisorAppointmentCreate,
-    ShopHourEntry, BlockDateCreate,
+    ShopHourEntry, BlockDateCreate, AIChatMessage,
     ALLOWED_MIME_TYPES, MAX_UPLOAD_BYTES,
 )
 
 load_dotenv()
+
+# ── Anthropic (optional) ─────────────────────────────────────────────────────
+try:
+    import anthropic as _anthropic
+    _anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_client = _anthropic.Anthropic(api_key=_anthropic_key) if _anthropic_key else None
+except ImportError:
+    anthropic_client = None
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -530,6 +538,86 @@ async def toggle_warranty_status(vehicle_id: str, user: dict = Depends(get_curre
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── AI Chat endpoint ──────────────────────────────────────────────────────────
+
+_STATUS_LABELS = {
+    "checked_in": "Checked In",
+    "inspection": "Under Inspection",
+    "waiting_parts": "Waiting on Parts",
+    "in_progress": "In Progress",
+    "awaiting_warranty": "Awaiting Warranty Approval",
+    "quality_check": "Final Quality Check",
+    "ready": "Ready for Pickup",
+    "completed": "Completed",
+}
+
+
+@app.post("/vehicles/{vehicle_id}/ai-chat")
+async def ai_chat(vehicle_id: str, data: AIChatMessage):
+    """Customer sends a message; AI responds. Both saved to messages table."""
+    # Get vehicle + shop context
+    try:
+        v_resp = supabase.table("vehicles").select("*").eq("vehicle_id", vehicle_id).execute()
+        if not v_resp.data:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+        v = v_resp.data[0]
+        shop_name = _shop_sms_name(v.get("shop_id", ""))
+        first_name = (v.get("customer_name") or "valued customer").split()[0]
+        vehicle_str = " ".join(str(x) for x in [v.get("year"), v.get("make"), v.get("model")] if x)
+        status_label = _STATUS_LABELS.get(v.get("status", ""), v.get("status", ""))
+
+        # Fetch conversation history (last 20 exchanges)
+        hist_resp = (
+            supabase.table("messages")
+            .select("sender_type,message_text")
+            .eq("vehicle_id", vehicle_id)
+            .in_("sender_type", ["customer", "ai"])
+            .order("sent_at")
+            .limit(20)
+            .execute()
+        )
+
+        conv_messages = []
+        for msg in (hist_resp.data or []):
+            role = "user" if msg["sender_type"] == "customer" else "assistant"
+            conv_messages.append({"role": role, "content": msg["message_text"]})
+        conv_messages.append({"role": "user", "content": data.message})
+
+        if not anthropic_client:
+            ai_text = "Our AI assistant isn't available right now. A service advisor will respond to your message shortly."
+        else:
+            system_prompt = (
+                f"You are a friendly AI service assistant for {shop_name}, an auto repair shop.\n"
+                f"Customer: {first_name}. Vehicle: {vehicle_str or 'vehicle on file'}. "
+                f"Current status: {status_label}.\n\n"
+                f"Be warm, concise, and helpful. Answer questions about service status, general automotive topics, "
+                f"and shop services. For specific repair costs, timelines, or technical details you don't know, "
+                f"say the service advisor can provide that. Keep responses under 3 short sentences unless more detail "
+                f"is clearly needed. Do not make up information."
+            )
+            ai_resp = anthropic_client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=350,
+                system=system_prompt,
+                messages=conv_messages,
+            )
+            ai_text = ai_resp.content[0].text
+
+        # Save both messages
+        supabase.table("messages").insert([
+            {"vehicle_id": vehicle_id, "sender_type": "customer", "message_text": data.message},
+            {"vehicle_id": vehicle_id, "sender_type": "ai", "message_text": ai_text},
+        ]).execute()
+
+        return {"response": ai_text}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"ai_chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Message endpoints ──────────────────────────────────────────────────────────
 
 @app.post("/vehicles/{vehicle_id}/messages")
@@ -546,6 +634,25 @@ async def create_message(
             "sender_type": message.sender_type,
             "message_text": message.message_text,
         }).execute()
+
+        # SMS customer when advisor sends a message
+        if message.sender_type == "advisor":
+            try:
+                v_resp = supabase.table("vehicles").select("customer_phone,customer_name,shop_id,unique_link").eq("vehicle_id", vehicle_id).execute()
+                if v_resp.data:
+                    v = v_resp.data[0]
+                    if v.get("customer_phone"):
+                        shop_name = _shop_sms_name(v.get("shop_id", ""))
+                        first_name = (v.get("customer_name") or "there").split()[0]
+                        preview = message.message_text[:100] + ("…" if len(message.message_text) > 100 else "")
+                        portal_link = f"{PORTAL_URL}/track/{v['unique_link']}"
+                        send_sms(
+                            v["customer_phone"],
+                            f"Hi {first_name}! New message from {shop_name}: \"{preview}\" View here: {portal_link}"
+                        )
+            except Exception as sms_err:
+                logger.warning(f"Advisor message SMS failed (non-critical): {sms_err}")
+
         return resp.data[0]
     except HTTPException:
         raise

@@ -7,7 +7,7 @@ VALID_STATUSES = {
     "awaiting_warranty", "quality_check", "ready", "completed"
 }
 
-VALID_SENDER_TYPES = {"customer", "advisor"}
+VALID_SENDER_TYPES = {"customer", "advisor", "ai"}
 
 ALLOWED_MIME_TYPES = {
     "image/jpeg", "image/png", "image/webp", "image/gif",
@@ -227,6 +227,17 @@ class UserUpdate(BaseModel):
         if v is not None and v not in {"admin", "advisor"}:
             raise ValueError("role must be 'admin' or 'advisor'")
         return v
+
+
+class AIChatMessage(BaseModel):
+    message: str
+
+    @field_validator("message")
+    @classmethod
+    def message_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("message cannot be empty")
+        return v.strip()
 
 
 class AdvisorAppointmentCreate(BaseModel):
