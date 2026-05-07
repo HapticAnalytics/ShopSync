@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
+import { VINScanner } from './VINScanner';
 
 const API = import.meta.env.VITE_API_BASE || 'https://shopsync-backend-w8ja.onrender.com';
 
@@ -117,134 +118,6 @@ function groupByDate(appointments) {
     groups[key].push(apt);
   }
   return Object.entries(groups).sort(([a],[b]) => a.localeCompare(b));
-}
-
-// ── VIN Scanner Component ──────────────────────────────────────────────────────
-
-function VINScanner({ onScan, onClose }) {
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const scanningRef = useRef(true);
-  const [error, setError] = useState('');
-  const [hint, setHint] = useState('Starting camera…');
-
-  useEffect(() => {
-    startCamera();
-    return () => {
-      scanningRef.current = false;
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
-    };
-  }, []);
-
-  async function startCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      setHint('Align VIN barcode within the frame');
-      if ('BarcodeDetector' in window) {
-        runDetector();
-      } else {
-        setError('Barcode scanning not supported on this browser.\nPlease type the VIN manually.');
-      }
-    } catch {
-      setError('Camera access denied.\nPlease allow camera access and try again.');
-    }
-  }
-
-  async function runDetector() {
-    let detector;
-    try {
-      const supported = await window.BarcodeDetector.getSupportedFormats();
-      const formats = supported.filter(f => ['code_128', 'code_39', 'data_matrix', 'pdf417'].includes(f));
-      detector = new window.BarcodeDetector({ formats: formats.length ? formats : ['code_128', 'code_39'] });
-    } catch {
-      setError('Barcode scanner unavailable.\nPlease type the VIN manually.');
-      return;
-    }
-
-    const tick = async () => {
-      if (!scanningRef.current) return;
-      const video = videoRef.current;
-      if (!video || video.readyState < 2) {
-        requestAnimationFrame(tick);
-        return;
-      }
-      try {
-        const barcodes = await detector.detect(video);
-        for (const bc of barcodes) {
-          const val = bc.rawValue.replace(/\s/g, '').toUpperCase();
-          // VIN: 17 chars, no I/O/Q
-          if (/^[A-HJ-NPR-Z0-9]{17}$/.test(val)) {
-            scanningRef.current = false;
-            if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-            onScan(val);
-            return;
-          }
-        }
-      } catch { /* ignore frame errors */ }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black z-[70] flex flex-col">
-      <div className="flex items-center justify-between px-5 py-4 flex-shrink-0">
-        <p className="text-white text-base font-semibold">Scan VIN Barcode</p>
-        <button
-          onClick={() => { scanningRef.current = false; if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); onClose(); }}
-          className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 text-white text-xl"
-        >×</button>
-      </div>
-
-      {error ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-8 gap-4">
-          <div className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center">
-            <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <p className="text-white text-center text-sm whitespace-pre-line">{error}</p>
-          <button onClick={() => { scanningRef.current = false; if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); onClose(); }}
-            className="mt-2 bg-white text-black text-sm font-semibold px-6 py-2.5 rounded-xl">
-            Close
-          </button>
-        </div>
-      ) : (
-        <div className="flex-1 relative overflow-hidden">
-          <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
-          {/* Overlay */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <div className="relative">
-              {/* Dim overlay with cutout using box-shadow */}
-              <div className="w-72 h-16 border-2 border-white rounded-lg relative">
-                {/* Corner accents */}
-                <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-white rounded-tl" />
-                <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-white rounded-tr" />
-                <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-white rounded-bl" />
-                <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-white rounded-br" />
-              </div>
-            </div>
-            <p className="mt-4 text-white text-xs text-center bg-black/40 px-3 py-1.5 rounded-full">{hint}</p>
-          </div>
-        </div>
-      )}
-
-      <div className="px-5 py-4 flex-shrink-0">
-        <p className="text-white/50 text-xs text-center">
-          Look for the barcode on the driver-side door jamb sticker or windshield
-        </p>
-      </div>
-    </div>
-  );
 }
 
 // ── Vehicle Field Components ───────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useParams } from 'react-router-dom';
 
@@ -24,6 +24,12 @@ const CustomerPortal = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedMedia, setSelectedMedia] = useState(null);
+
+  // AI chat state
+  const [chatMode, setChatMode] = useState('ai'); // 'ai' | 'human'
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const messagesEndRef = useRef(null);
 
   // ── Data fetching ────────────────────────────────────────────────────────
 
@@ -97,19 +103,54 @@ const CustomerPortal = () => {
     return () => clearInterval(interval);
   }, [vehicle?.vehicle_id]);
 
+  // Auto-scroll to bottom when messages change or AI is typing
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, aiLoading]);
+
   // ── Actions ──────────────────────────────────────────────────────────────
 
   const sendMessage = async () => {
-    if (!newMessage.trim()) return;
-    try {
-      await axios.post(`${API_BASE}/vehicles/${vehicle.vehicle_id}/messages`, {
-        message_text: newMessage,
+    if (!newMessage.trim() || aiLoading) return;
+    const text = newMessage.trim();
+    setNewMessage('');
+
+    if (chatMode === 'ai') {
+      // Optimistically add customer message to the list
+      const tempId = `temp-${Date.now()}`;
+      const customerMsg = {
+        message_id: tempId,
+        message_text: text,
         sender_type: 'customer',
-      });
-      setNewMessage('');
-      fetchMessages(vehicle.vehicle_id);
-    } catch (err) {
-      console.error('Failed to send message:', err);
+        sent_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, customerMsg]);
+      setAiLoading(true);
+
+      try {
+        await axios.post(`${API_BASE}/vehicles/${vehicle.vehicle_id}/ai-chat`, {
+          message: text,
+        });
+        // Fetch real messages (replaces temp + includes AI response)
+        await fetchMessages(vehicle.vehicle_id);
+      } catch (err) {
+        console.error('AI chat failed:', err);
+        // On error, reload messages to show whatever was saved
+        await fetchMessages(vehicle.vehicle_id);
+      } finally {
+        setAiLoading(false);
+      }
+    } else {
+      // Human / advisor mode — send as customer message
+      try {
+        await axios.post(`${API_BASE}/vehicles/${vehicle.vehicle_id}/messages`, {
+          message_text: text,
+          sender_type: 'customer',
+        });
+        fetchMessages(vehicle.vehicle_id);
+      } catch (err) {
+        console.error('Failed to send message:', err);
+      }
     }
   };
 
@@ -165,7 +206,16 @@ const CustomerPortal = () => {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center px-4">
         <div className="text-center max-w-md">
-          <div className="text-6xl mb-6">🚗</div>
+          <div className="w-20 h-20 mx-auto mb-6 flex items-center justify-center">
+            <svg className="w-20 h-20 text-gray-300" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M8 40 L12 24 C13 20 15 18 19 18 L26 18 L30 12 L34 12 L38 18 L45 18 C49 18 51 20 52 24 L56 40" strokeLinecap="round"/>
+              <rect x="8" y="40" width="48" height="10" rx="4"/>
+              <circle cx="18" cy="50" r="5" fill="currentColor" className="text-gray-300"/>
+              <circle cx="46" cy="50" r="5" fill="currentColor" className="text-gray-300"/>
+              <circle cx="18" cy="50" r="2.5" fill="white"/>
+              <circle cx="46" cy="50" r="2.5" fill="white"/>
+            </svg>
+          </div>
           <h1 className="text-2xl font-semibold text-black mb-2">Vehicle Not Found</h1>
           <p className="text-gray-500">Please check your tracking link and try again.</p>
         </div>
@@ -357,7 +407,7 @@ const CustomerPortal = () => {
                 })}
               </div>
             </div>
-            <style jsx>{`
+            <style>{`
               @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
               .animate-float { animation: float 2s ease-in-out infinite; }
             `}</style>
@@ -437,48 +487,165 @@ const CustomerPortal = () => {
           </div>
         )}
 
-        {/* ── Messages ── */}
+        {/* ── Messages / AI Chat ── */}
         <div className="bg-gray-100 rounded-3xl overflow-hidden border border-gray-200">
-          <div className="p-6 border-b border-gray-200">
-            <h3 className="text-xl font-semibold text-black">Messages</h3>
-            <p className="text-sm text-gray-500 mt-1">Chat with your service advisor</p>
-          </div>
-          <div className="p-6 space-y-4 min-h-[300px] max-h-96 overflow-y-auto bg-white">
-            {messages.length === 0 ? (
-              <div className="text-center py-16">
-                <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                </svg>
-                <p className="text-gray-500 font-medium">No messages yet</p>
-                <p className="text-sm text-gray-400 mt-1">Start a conversation with your service advisor</p>
+          {/* Header */}
+          <div className="p-5 sm:p-6 border-b border-gray-200">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-semibold text-black">
+                  {chatMode === 'ai' ? 'Ask ShopSync AI' : 'Message Your Advisor'}
+                </h3>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  {chatMode === 'ai'
+                    ? 'Get instant answers about your vehicle service'
+                    : 'Send a message directly to your service advisor'}
+                </p>
               </div>
-            ) : (
-              messages.map((msg) => (
-                <div key={msg.message_id} className={`flex ${msg.sender_type === 'customer' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-sm rounded-3xl px-5 py-3 ${msg.sender_type === 'customer' ? 'bg-black text-white' : 'bg-gray-100 text-black border border-gray-200'}`}>
-                    <p className={`text-xs font-semibold mb-1.5 ${msg.sender_type === 'customer' ? 'text-gray-400' : 'text-gray-500'}`}>
-                      {msg.sender_type === 'customer' ? 'You' : 'Service Advisor'}
+              {/* AI badge */}
+              {chatMode === 'ai' && (
+                <div className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 border border-indigo-100 rounded-full">
+                  <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse" />
+                  <span className="text-xs font-semibold text-indigo-600">AI</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Messages list */}
+          <div className="p-5 sm:p-6 space-y-4 min-h-[300px] max-h-96 overflow-y-auto bg-white">
+            {messages.length === 0 && !aiLoading ? (
+              /* Welcome message when no history */
+              <div className="flex justify-start">
+                <div className="flex items-start gap-3 max-w-[85%]">
+                  {/* AI avatar */}
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center mt-1">
+                    <svg viewBox="0 0 22 22" fill="none" className="w-4 h-4">
+                      <path d="M4.5 11C4.5 7.41 7.41 4.5 11 4.5c1.86 0 3.54.75 4.76 1.97" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                      <polyline points="13.5,3.5 15.9,6.5 13.1,8.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M17.5 11c0 3.59-2.91 6.5-6.5 6.5-1.86 0-3.54-.75-4.76-1.97" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                      <polyline points="8.5,18.5 6.1,15.5 8.9,13.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-2xl rounded-tl-sm px-4 py-3">
+                    <p className="text-xs font-semibold text-indigo-500 mb-1">ShopSync AI</p>
+                    <p className="text-sm text-black leading-relaxed">
+                      Hi {vehicle.customer_name?.split(' ')[0] || 'there'}! I'm the ShopSync AI assistant. I can answer questions about your vehicle's service status, estimated completion time, and more. How can I help you today?
                     </p>
-                    <p className="text-sm leading-relaxed">{msg.message_text}</p>
-                    <p className="text-xs mt-1.5 text-gray-400">{new Date(msg.sent_at).toLocaleString()}</p>
                   </div>
                 </div>
-              ))
+              </div>
+            ) : (
+              messages.map((msg) => {
+                const isCustomer = msg.sender_type === 'customer';
+                const isAI = msg.sender_type === 'ai';
+                const isAdvisor = msg.sender_type === 'advisor';
+                return (
+                  <div key={msg.message_id} className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`flex items-start gap-2.5 ${isCustomer ? 'flex-row-reverse' : ''} max-w-[85%]`}>
+                      {/* Avatar for AI */}
+                      {isAI && (
+                        <div className="flex-shrink-0 w-7 h-7 bg-indigo-600 rounded-full flex items-center justify-center mt-0.5">
+                          <svg viewBox="0 0 22 22" fill="none" className="w-3.5 h-3.5">
+                            <path d="M4.5 11C4.5 7.41 7.41 4.5 11 4.5c1.86 0 3.54.75 4.76 1.97" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                            <polyline points="13.5,3.5 15.9,6.5 13.1,8.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            <path d="M17.5 11c0 3.59-2.91 6.5-6.5 6.5-1.86 0-3.54-.75-4.76-1.97" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                            <polyline points="8.5,18.5 6.1,15.5 8.9,13.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </div>
+                      )}
+                      <div className={`rounded-2xl px-4 py-2.5 ${
+                        isCustomer
+                          ? 'bg-black text-white rounded-tr-sm'
+                          : isAI
+                            ? 'bg-indigo-50 border border-indigo-100 text-black rounded-tl-sm'
+                            : 'bg-gray-100 border border-gray-200 text-black rounded-tl-sm'
+                      }`}>
+                        <p className={`text-xs font-semibold mb-1 ${
+                          isCustomer ? 'text-gray-400' : isAI ? 'text-indigo-500' : 'text-gray-500'
+                        }`}>
+                          {isCustomer ? 'You' : isAI ? 'ShopSync AI' : 'Service Advisor'}
+                        </p>
+                        <p className="text-sm leading-relaxed">{msg.message_text}</p>
+                        <p className={`text-xs mt-1.5 ${isCustomer ? 'text-gray-400' : 'text-gray-400'}`}>
+                          {new Date(msg.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
             )}
+
+            {/* AI typing indicator */}
+            {aiLoading && (
+              <div className="flex justify-start">
+                <div className="flex items-start gap-2.5 max-w-[85%]">
+                  <div className="flex-shrink-0 w-7 h-7 bg-indigo-600 rounded-full flex items-center justify-center mt-0.5">
+                    <svg viewBox="0 0 22 22" fill="none" className="w-3.5 h-3.5">
+                      <path d="M4.5 11C4.5 7.41 7.41 4.5 11 4.5c1.86 0 3.54.75 4.76 1.97" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                      <polyline points="13.5,3.5 15.9,6.5 13.1,8.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M17.5 11c0 3.59-2.91 6.5-6.5 6.5-1.86 0-3.54-.75-4.76-1.97" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                      <polyline points="8.5,18.5 6.1,15.5 8.9,13.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-2xl rounded-tl-sm px-4 py-3">
+                    <p className="text-xs font-semibold text-indigo-500 mb-2">ShopSync AI</p>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
           </div>
-          <div className="p-4 sm:p-6 bg-white border-t border-gray-200">
-            <div className="flex gap-2">
+
+          {/* Input + mode toggle */}
+          <div className="p-4 sm:p-5 bg-white border-t border-gray-200">
+            <div className="flex gap-2 mb-3">
               <input
                 type="text"
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-                placeholder="Type your message…"
-                className="flex-1 min-w-0 px-3 sm:px-4 py-3 bg-gray-50 border border-gray-200 rounded-full text-base text-black placeholder-gray-400 focus:ring-2 focus:ring-black outline-none transition-all"
+                onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+                placeholder={chatMode === 'ai' ? 'Ask a question…' : 'Type your message…'}
+                disabled={aiLoading}
+                className="flex-1 min-w-0 px-3 sm:px-4 py-3 bg-gray-50 border border-gray-200 rounded-full text-base text-black placeholder-gray-400 focus:ring-2 focus:ring-indigo-300 outline-none transition-all disabled:opacity-50"
               />
-              <button onClick={sendMessage} className="px-4 sm:px-6 py-3 bg-black text-white rounded-full font-semibold hover:bg-gray-900 transition-all flex-shrink-0 text-sm whitespace-nowrap">
-                Send
+              <button
+                onClick={sendMessage}
+                disabled={aiLoading || !newMessage.trim()}
+                className={`px-4 sm:px-6 py-3 rounded-full font-semibold transition-all flex-shrink-0 text-sm whitespace-nowrap disabled:opacity-40 ${
+                  chatMode === 'ai'
+                    ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    : 'bg-black text-white hover:bg-gray-900'
+                }`}
+              >
+                {chatMode === 'ai' ? 'Ask' : 'Send'}
               </button>
+            </div>
+
+            {/* Mode toggle */}
+            <div className="flex justify-center">
+              {chatMode === 'ai' ? (
+                <button
+                  onClick={() => setChatMode('human')}
+                  className="text-xs text-gray-400 hover:text-gray-600 transition-colors underline underline-offset-2"
+                >
+                  Talk to a person instead
+                </button>
+              ) : (
+                <button
+                  onClick={() => setChatMode('ai')}
+                  className="text-xs text-indigo-400 hover:text-indigo-600 transition-colors underline underline-offset-2"
+                >
+                  Back to AI assistant
+                </button>
+              )}
             </div>
           </div>
         </div>
