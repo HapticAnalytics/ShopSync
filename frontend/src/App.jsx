@@ -7,6 +7,7 @@ import AppointmentsView from './components/AppointmentsView';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import AcceptInvite from './components/AcceptInvite';
+import ResetPassword from './components/ResetPassword';
 
 const LoadingScreen = () => (
   <div className="min-h-screen bg-white flex items-center justify-center">
@@ -32,6 +33,7 @@ function App() {
           <Route path="/track/:uniqueLink" element={<CustomerPortal />} />
           <Route path="/schedule/:shopId" element={<CustomerScheduler />} />
           <Route path="/accept-invite" element={<AcceptInvite />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/login" element={<Login />} />
           <Route
             path="/advisor"

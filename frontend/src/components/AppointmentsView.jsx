@@ -309,7 +309,7 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Appointment</p>
               <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Drop-off Date *</label>
                     <input
@@ -317,6 +317,7 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
                       value={form.date}
                       onChange={e => set('date', e.target.value)}
                       min={todayYMD()}
+                      style={{ fontSize: '16px' }}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
                     />
                   </div>
@@ -325,6 +326,7 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
                     <select
                       value={form.time}
                       onChange={e => set('time', e.target.value)}
+                      style={{ fontSize: '16px' }}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black bg-white"
                     >
                       {TIME_OPTIONS.map(o => (
@@ -434,20 +436,18 @@ export default function AppointmentsView() {
       {/* Header */}
       <div className="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <button onClick={() => navigate('/advisor')} className="text-sm text-gray-500 hover:text-gray-700">
-              ← Dashboard
+          <div className="flex items-center gap-2 min-w-0">
+            <button onClick={() => navigate('/advisor')} className="text-sm text-gray-500 hover:text-gray-700 flex-shrink-0">
+              ←
             </button>
-            <h1 className="text-lg font-semibold text-gray-900">Appointments</h1>
+            <h1 className="text-lg font-semibold text-gray-900 truncate">Appointments</h1>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowModal(true)}
-              className="bg-black text-white text-sm font-medium rounded-xl px-4 py-2 hover:bg-gray-800 transition-colors"
-            >
-              + New Appointment
-            </button>
-          </div>
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex-shrink-0 bg-black text-white text-sm font-medium rounded-xl px-4 py-2 hover:bg-gray-800 transition-colors"
+          >
+            + New
+          </button>
         </div>
       </div>
 

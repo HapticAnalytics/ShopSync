@@ -129,9 +129,14 @@ const CustomerPortal = () => {
     if (!vehicle?.estimated_completion) return null;
     const diffMs = new Date(vehicle.estimated_completion) - new Date();
     if (diffMs < 0) return 'Overdue';
-    const hours = Math.floor(diffMs / (1000 * 60 * 60));
-    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    return hours > 0 ? `${hours}h ${minutes}m remaining` : `${minutes}m remaining`;
+    const totalMinutes = Math.floor(diffMs / (1000 * 60));
+    const totalHours = Math.floor(totalMinutes / 60);
+    const days = Math.floor(totalHours / 24);
+    const remainingHours = totalHours % 24;
+    const minutes = totalMinutes % 60;
+    if (days >= 1) return remainingHours > 0 ? `${days}d ${remainingHours}h remaining` : `${days}d remaining`;
+    if (totalHours > 0) return `${totalHours}h ${minutes}m remaining`;
+    return `${minutes}m remaining`;
   };
 
   const getApprovalPhoto = (approvalId) => media.find((m) => m.caption === `approval_${approvalId}`);
@@ -183,14 +188,14 @@ const CustomerPortal = () => {
     <div className="min-h-screen bg-white overflow-x-hidden">
       {/* ── Header ── */}
       <div className="bg-white/80 backdrop-blur-2xl border-b border-gray-200 sticky top-0 z-50">
-        <div className="max-w-4xl mx-auto px-6 py-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-semibold text-black">{shopName}</h1>
-              <p className="text-sm text-gray-500 mt-1">Service Center</p>
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-2xl font-semibold text-black truncate">{shopName}</h1>
+              <p className="text-xs sm:text-sm text-gray-500 mt-0.5">Service Tracker</p>
             </div>
             {timeRemaining && (
-              <div className={`px-4 py-2 rounded-full text-sm font-medium ${timeRemaining === 'Overdue' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-blue-50 text-blue-700 border border-blue-200'}`}>
+              <div className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs sm:text-sm font-semibold text-center ${timeRemaining === 'Overdue' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-blue-50 text-blue-700 border border-blue-200'}`}>
                 {timeRemaining}
               </div>
             )}
@@ -255,7 +260,7 @@ const CustomerPortal = () => {
           <div className="p-6">
             <div className="flex flex-col sm:flex-row gap-6">
               <div className="flex-shrink-0">
-                <div className="w-full sm:w-48 h-48 bg-gray-200 rounded-2xl overflow-hidden">
+                <div className="w-full sm:w-48 h-48 bg-gray-200 rounded-2xl overflow-hidden flex items-center justify-center">
                   {vehiclePhoto ? (
                     vehiclePhoto.media_type === 'photo' ? (
                       <img
@@ -263,13 +268,23 @@ const CustomerPortal = () => {
                         alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`}
                         className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity"
                         onClick={() => setSelectedMedia(vehiclePhoto)}
-                        onError={(e) => { e.target.src = 'https://images.unsplash.com/photo-1583121274602-3e2820c69888?w=400&h=400&fit=crop&q=80'; }}
+                        onError={(e) => { e.target.style.display = 'none'; }}
                       />
                     ) : (
                       <video src={vehiclePhoto.media_url} className="w-full h-full object-cover cursor-pointer" onClick={() => setSelectedMedia(vehiclePhoto)} />
                     )
                   ) : (
-                    <img src="https://images.unsplash.com/photo-1583121274602-3e2820c69888?w=400&h=400&fit=crop&q=80" alt="Vehicle placeholder" className="w-full h-full object-cover" />
+                    <div className="w-full h-full bg-gradient-to-br from-gray-200 to-gray-300 flex flex-col items-center justify-center">
+                      <svg className="w-16 h-16 text-gray-400" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path d="M8 40 L12 24 C13 20 15 18 19 18 L26 18 L30 12 L34 12 L38 18 L45 18 C49 18 51 20 52 24 L56 40" strokeLinecap="round"/>
+                        <rect x="8" y="40" width="48" height="10" rx="4"/>
+                        <circle cx="18" cy="50" r="5" fill="currentColor" className="text-gray-400"/>
+                        <circle cx="46" cy="50" r="5" fill="currentColor" className="text-gray-400"/>
+                        <circle cx="18" cy="50" r="2.5" fill="white"/>
+                        <circle cx="46" cy="50" r="2.5" fill="white"/>
+                      </svg>
+                      <p className="text-xs text-gray-400 mt-2">No photo yet</p>
+                    </div>
                   )}
                 </div>
               </div>
@@ -361,23 +376,21 @@ const CustomerPortal = () => {
                 const approvalPhoto = getApprovalPhoto(approval.approval_id);
                 return (
                   <div key={approval.approval_id} className={`rounded-2xl p-5 sm:p-6 border-2 ${approval.approved === null ? 'border-yellow-300 bg-yellow-50' : approval.approved ? 'border-green-300 bg-green-50' : 'border-red-300 bg-red-50'}`}>
-                    <div className="flex items-start gap-4 mb-4">
+                    <div className="mb-4">
                       {approvalPhoto && (
-                        <div className="flex-shrink-0">
-                          <img src={approvalPhoto.media_url} alt="Issue photo" className="w-32 h-32 object-cover rounded-2xl cursor-pointer border-2 border-gray-300 hover:border-gray-400 transition-all" onClick={() => setSelectedMedia(approvalPhoto)} />
-                        </div>
+                        <img src={approvalPhoto.media_url} alt="Issue photo" className="w-full h-40 object-cover rounded-2xl cursor-pointer border-2 border-gray-300 hover:border-gray-400 transition-all mb-3" onClick={() => setSelectedMedia(approvalPhoto)} />
                       )}
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-semibold text-black text-lg mb-2">{approval.description}</h4>
-                        <p className="text-3xl font-bold text-black">${approval.cost.toFixed(2)}</p>
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className="font-semibold text-black text-base leading-snug flex-1">{approval.description}</h4>
+                        {approval.approved === null ? (
+                          <span className="flex-shrink-0 px-2.5 py-1 bg-yellow-200 text-yellow-800 rounded-full text-xs font-semibold">Pending</span>
+                        ) : approval.approved ? (
+                          <span className="flex-shrink-0 px-2.5 py-1 bg-green-200 text-green-800 rounded-full text-xs font-semibold">✓ Approved</span>
+                        ) : (
+                          <span className="flex-shrink-0 px-2.5 py-1 bg-red-200 text-red-800 rounded-full text-xs font-semibold">✗ Declined</span>
+                        )}
                       </div>
-                      {approval.approved === null ? (
-                        <span className="px-3 py-1 bg-yellow-200 text-yellow-800 rounded-full text-sm font-semibold h-fit">Pending</span>
-                      ) : approval.approved ? (
-                        <span className="px-3 py-1 bg-green-200 text-green-800 rounded-full text-sm font-semibold h-fit">✓ Approved</span>
-                      ) : (
-                        <span className="px-3 py-1 bg-red-200 text-red-800 rounded-full text-sm font-semibold h-fit">✗ Declined</span>
-                      )}
+                      <p className="text-2xl font-bold text-black mt-2">${approval.cost.toFixed(2)}</p>
                     </div>
                     {approval.approved === null && (
                       <div className="flex gap-3 mt-4">

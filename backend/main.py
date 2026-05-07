@@ -462,19 +462,33 @@ async def update_vehicle_status(
 
         if customer_phone:
             shop_name = _shop_sms_name(shop_id)
-            status_messages = {
-                "checked_in": f"Hi {customer_name}! Your vehicle has been checked in at {shop_name}.",
-                "inspection": "Update: Your vehicle is now being inspected.",
-                "waiting_parts": "Update: Your vehicle is awaiting parts. We'll notify you when work resumes.",
-                "in_progress": "Update: Your vehicle service is now in progress.",
-                "awaiting_warranty": "Update: Your vehicle is awaiting warranty approval. We'll keep you posted.",
-                "quality_check": "Update: Your vehicle is undergoing a final quality check.",
-                "ready": f"Great news! Your vehicle is ready for pickup at {shop_name}. Thank you for your business!",
-            }
-            sms_body = status_messages.get(
-                status_update.new_status,
-                f"Update on your vehicle: {status_update.new_status.replace('_', ' ').title()}",
-            )
+            first_name = customer_name.split()[0] if customer_name else "there"
+            v_year = current_vehicle.get("year", "")
+            v_make = current_vehicle.get("make", "")
+            v_model = current_vehicle.get("model", "")
+            vehicle_str = " ".join(str(p) for p in [v_year, v_make, v_model] if p)
+
+            if status_update.new_status == "ready":
+                shop_resp = supabase.table("shops").select("google_review_url").eq("shop_id", shop_id).execute()
+                review_url = (shop_resp.data[0].get("google_review_url") or "") if shop_resp.data else ""
+                sms_body = f"Great news {first_name}! Your vehicle is ready for pickup at {shop_name}."
+                if vehicle_str:
+                    sms_body += f" Thank you for trusting us with your {vehicle_str}."
+                if review_url:
+                    sms_body += f" If you have a moment, please leave us a review: {review_url}"
+            else:
+                status_messages = {
+                    "checked_in": f"Hi {first_name}! Your vehicle has been checked in at {shop_name}.",
+                    "inspection": "Update: Your vehicle is now being inspected.",
+                    "waiting_parts": "Update: Your vehicle is awaiting parts. We'll notify you when work resumes.",
+                    "in_progress": "Update: Your vehicle service is now in progress.",
+                    "awaiting_warranty": "Update: Your vehicle is awaiting warranty approval. We'll keep you posted.",
+                    "quality_check": "Update: Your vehicle is undergoing a final quality check.",
+                }
+                sms_body = status_messages.get(
+                    status_update.new_status,
+                    f"Update on your vehicle: {status_update.new_status.replace('_', ' ').title()}",
+                )
             if status_update.message:
                 sms_body += f"\n{status_update.message}"
             send_sms(customer_phone, sms_body)
@@ -626,7 +640,26 @@ async def create_approval(
             "description": approval.description,
             "cost": approval.cost,
         }).execute()
-        return resp.data[0]
+        new_approval = resp.data[0]
+
+        # SMS customer with portal link
+        try:
+            v_resp = supabase.table("vehicles").select("customer_phone,customer_name,unique_link,shop_id").eq("vehicle_id", vehicle_id).execute()
+            if v_resp.data:
+                v = v_resp.data[0]
+                if v.get("customer_phone"):
+                    shop_name = _shop_sms_name(v.get("shop_id", ""))
+                    first_name = (v.get("customer_name") or "there").split()[0]
+                    portal_link = f"{PORTAL_URL}/track/{v['unique_link']}"
+                    send_sms(
+                        v["customer_phone"],
+                        f"Hi {first_name}! {shop_name} has sent you a repair approval request. "
+                        f"Please review and respond here: {portal_link}"
+                    )
+        except Exception as sms_err:
+            logger.warning(f"Approval SMS failed (non-critical): {sms_err}")
+
+        return new_approval
     except HTTPException:
         raise
     except Exception as e:
