@@ -29,7 +29,53 @@ const TRANSITIONS = {
   no_show:   [],
 };
 
-// Generate 15-min time slots 7 AM – 6 PM
+// ── Vehicle data ───────────────────────────────────────────────────────────────
+
+const CURRENT_YEAR = new Date().getFullYear();
+const YEARS = Array.from({ length: CURRENT_YEAR - 1979 }, (_, i) => String(CURRENT_YEAR + 1 - i));
+
+const MAKES = [
+  'Acura','Alfa Romeo','Audi','BMW','Buick','Cadillac','Chevrolet','Chrysler',
+  'Dodge','Ford','Genesis','GMC','Honda','Hyundai','Infiniti','Jaguar','Jeep',
+  'Kia','Land Rover','Lexus','Lincoln','Mazda','Mercedes-Benz','Mitsubishi',
+  'Nissan','Porsche','RAM','Rivian','Subaru','Tesla','Toyota','Volkswagen',
+  'Volvo','Other',
+];
+
+const MODELS_BY_MAKE = {
+  'Chevrolet': ['Blazer','Colorado','Corvette','Equinox','Express','Malibu','Silverado 1500','Silverado 2500','Silverado 3500','Suburban','Tahoe','Trailblazer','Traverse','Other'],
+  'Dodge':     ['Challenger','Charger','Durango','Hornet','Ram 1500','Ram 2500','Ram 3500','Other'],
+  'Ford':      ['Bronco','Bronco Sport','Edge','Escape','Expedition','Explorer','F-150','F-250','F-350','Maverick','Mustang','Ranger','Transit','Other'],
+  'GMC':       ['Acadia','Canyon','Envoy','Sierra 1500','Sierra 2500','Sierra 3500','Terrain','Yukon','Yukon XL','Other'],
+  'Jeep':      ['Cherokee','Compass','Gladiator','Grand Cherokee','Grand Wagoneer','Renegade','Wagoneer','Wrangler','Other'],
+  'RAM':       ['1500','2500','3500','ProMaster','ProMaster City','Other'],
+  'Toyota':    ['4Runner','Camry','Corolla','GX','Highlander','Land Cruiser','RAV4','Sequoia','Sienna','Tacoma','Tundra','Other'],
+  'Honda':     ['Accord','CR-V','HR-V','Odyssey','Passport','Pilot','Ridgeline','Other'],
+  'Nissan':    ['Armada','Frontier','Kicks','Murano','Pathfinder','Rogue','Titan','Other'],
+  'Subaru':    ['Ascent','Crosstrek','Forester','Impreza','Legacy','Outback','Other'],
+  'Hyundai':   ['Ioniq 5','Ioniq 6','Palisade','Santa Cruz','Santa Fe','Tucson','Other'],
+  'Kia':       ['EV6','EV9','Sorento','Sportage','Telluride','Other'],
+  'BMW':       ['M3','M5','X1','X3','X5','X7','3 Series','5 Series','7 Series','Other'],
+  'Mercedes-Benz': ['G-Class','GLE','GLS','Sprinter','C-Class','E-Class','S-Class','Other'],
+  'Audi':      ['A4','A6','Q3','Q5','Q7','Q8','Other'],
+  'Volkswagen':['Atlas','Golf','ID.4','Jetta','Taos','Tiguan','Other'],
+  'Tesla':     ['Cybertruck','Model 3','Model S','Model X','Model Y','Other'],
+  'Land Rover':['Defender','Discovery','Discovery Sport','Range Rover','Range Rover Sport','Other'],
+  'Rivian':    ['R1S','R1T','Other'],
+  'Lexus':     ['GX','GX 550','LX','RX','NX','Other'],
+  'Acura':     ['MDX','RDX','TLX','Other'],
+  'Cadillac':  ['Escalade','XT4','XT5','XT6','Other'],
+  'Lincoln':   ['Aviator','Corsair','Navigator','Nautilus','Other'],
+  'Buick':     ['Enclave','Encore','Encore GX','Envision','Other'],
+  'Infiniti':  ['QX50','QX55','QX60','QX80','Other'],
+  'Mazda':     ['CX-5','CX-50','CX-9','Mazda3','Mazda6','Other'],
+  'Porsche':   ['Cayenne','Macan','Panamera','Taycan','Other'],
+  'Volvo':     ['XC40','XC60','XC90','Other'],
+  'Mitsubishi':['Eclipse Cross','Outlander','Outlander Sport','Other'],
+};
+
+// ── Time slots ─────────────────────────────────────────────────────────────────
+
 const TIME_OPTIONS = (() => {
   const opts = [];
   for (let h = 7; h <= 18; h++) {
@@ -37,9 +83,7 @@ const TIME_OPTIONS = (() => {
       if (h === 18 && m > 0) break;
       const hh = h % 12 === 0 ? 12 : h % 12;
       const ampm = h < 12 ? 'AM' : 'PM';
-      const label = `${hh}:${String(m).padStart(2, '0')} ${ampm}`;
-      const value = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-      opts.push({ label, value });
+      opts.push({ label: `${hh}:${String(m).padStart(2, '0')} ${ampm}`, value: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` });
     }
   }
   return opts;
@@ -75,6 +119,213 @@ function groupByDate(appointments) {
   return Object.entries(groups).sort(([a],[b]) => a.localeCompare(b));
 }
 
+// ── VIN Scanner Component ──────────────────────────────────────────────────────
+
+function VINScanner({ onScan, onClose }) {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const scanningRef = useRef(true);
+  const [error, setError] = useState('');
+  const [hint, setHint] = useState('Starting camera…');
+
+  useEffect(() => {
+    startCamera();
+    return () => {
+      scanningRef.current = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, []);
+
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setHint('Align VIN barcode within the frame');
+      if ('BarcodeDetector' in window) {
+        runDetector();
+      } else {
+        setError('Barcode scanning not supported on this browser.\nPlease type the VIN manually.');
+      }
+    } catch {
+      setError('Camera access denied.\nPlease allow camera access and try again.');
+    }
+  }
+
+  async function runDetector() {
+    let detector;
+    try {
+      const supported = await window.BarcodeDetector.getSupportedFormats();
+      const formats = supported.filter(f => ['code_128', 'code_39', 'data_matrix', 'pdf417'].includes(f));
+      detector = new window.BarcodeDetector({ formats: formats.length ? formats : ['code_128', 'code_39'] });
+    } catch {
+      setError('Barcode scanner unavailable.\nPlease type the VIN manually.');
+      return;
+    }
+
+    const tick = async () => {
+      if (!scanningRef.current) return;
+      const video = videoRef.current;
+      if (!video || video.readyState < 2) {
+        requestAnimationFrame(tick);
+        return;
+      }
+      try {
+        const barcodes = await detector.detect(video);
+        for (const bc of barcodes) {
+          const val = bc.rawValue.replace(/\s/g, '').toUpperCase();
+          // VIN: 17 chars, no I/O/Q
+          if (/^[A-HJ-NPR-Z0-9]{17}$/.test(val)) {
+            scanningRef.current = false;
+            if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+            onScan(val);
+            return;
+          }
+        }
+      } catch { /* ignore frame errors */ }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black z-[70] flex flex-col">
+      <div className="flex items-center justify-between px-5 py-4 flex-shrink-0">
+        <p className="text-white text-base font-semibold">Scan VIN Barcode</p>
+        <button
+          onClick={() => { scanningRef.current = false; if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); onClose(); }}
+          className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 text-white text-xl"
+        >×</button>
+      </div>
+
+      {error ? (
+        <div className="flex-1 flex flex-col items-center justify-center px-8 gap-4">
+          <div className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center">
+            <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <p className="text-white text-center text-sm whitespace-pre-line">{error}</p>
+          <button onClick={() => { scanningRef.current = false; if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); onClose(); }}
+            className="mt-2 bg-white text-black text-sm font-semibold px-6 py-2.5 rounded-xl">
+            Close
+          </button>
+        </div>
+      ) : (
+        <div className="flex-1 relative overflow-hidden">
+          <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+          {/* Overlay */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <div className="relative">
+              {/* Dim overlay with cutout using box-shadow */}
+              <div className="w-72 h-16 border-2 border-white rounded-lg relative">
+                {/* Corner accents */}
+                <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-white rounded-tl" />
+                <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-white rounded-tr" />
+                <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-white rounded-bl" />
+                <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-white rounded-br" />
+              </div>
+            </div>
+            <p className="mt-4 text-white text-xs text-center bg-black/40 px-3 py-1.5 rounded-full">{hint}</p>
+          </div>
+        </div>
+      )}
+
+      <div className="px-5 py-4 flex-shrink-0">
+        <p className="text-white/50 text-xs text-center">
+          Look for the barcode on the driver-side door jamb sticker or windshield
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Vehicle Field Components ───────────────────────────────────────────────────
+
+function YearSelect({ value, onChange }) {
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      style={{ fontSize: '16px' }}
+      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black bg-white appearance-none"
+    >
+      <option value="">Year</option>
+      {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+    </select>
+  );
+}
+
+function MakeSelect({ value, onChange, onOther }) {
+  function handleChange(e) {
+    const v = e.target.value;
+    onChange(v);
+    if (v === 'Other') onOther();
+  }
+  return (
+    <select
+      value={MAKES.includes(value) ? value : value ? 'Other' : ''}
+      onChange={handleChange}
+      style={{ fontSize: '16px' }}
+      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black bg-white appearance-none"
+    >
+      <option value="">Make</option>
+      {MAKES.map(m => <option key={m} value={m}>{m}</option>)}
+    </select>
+  );
+}
+
+function ModelSelect({ make, value, onChange }) {
+  const models = MODELS_BY_MAKE[make] || [];
+  if (!make || make === 'Other' || models.length === 0) {
+    return (
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder="Model"
+        style={{ fontSize: '16px' }}
+        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
+      />
+    );
+  }
+  const showText = value && !models.includes(value);
+  if (showText) {
+    return (
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder="Model"
+        style={{ fontSize: '16px' }}
+        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
+      />
+    );
+  }
+  return (
+    <select
+      value={models.includes(value) ? value : ''}
+      onChange={e => {
+        const v = e.target.value;
+        if (v === 'Other') onChange('');
+        else onChange(v);
+      }}
+      style={{ fontSize: '16px' }}
+      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black bg-white appearance-none"
+    >
+      <option value="">Model</option>
+      {models.map(m => <option key={m} value={m}>{m}</option>)}
+    </select>
+  );
+}
+
 // ── New Appointment Modal ──────────────────────────────────────────────────────
 
 function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
@@ -83,12 +334,14 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
     vehicle_year: '', vehicle_make: '', vehicle_model: '', vehicle_vin: '',
     drop_off_reason: '', date: todayYMD(), time: '08:00',
   });
+  const [makeOther, setMakeOther] = useState(false);
+  const [makeOtherText, setMakeOtherText] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [showVINScanner, setShowVINScanner] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const searchTimer = useRef(null);
-  const phoneRef = useRef(null);
 
   function set(field, value) {
     setForm(f => ({ ...f, [field]: value }));
@@ -126,8 +379,7 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
   function onNameChange(field, val) {
     set(field, val);
     clearTimeout(searchTimer.current);
-    const combined = field === 'first_name' ? `${val} ${form.last_name}` : `${form.first_name} ${val}`;
-    if (combined.trim().length < 3) return;
+    if (val.trim().length < 3) return;
     searchTimer.current = setTimeout(async () => {
       try {
         const r = await axios.get(`${API}/shop/${shopId}/customers/search?q=${encodeURIComponent(val.trim())}`, authConfig());
@@ -136,6 +388,8 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
       } catch { /* ignore */ }
     }, 400);
   }
+
+  const effectiveMake = makeOther ? makeOtherText : form.vehicle_make;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -157,7 +411,7 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
         customer_phone: form.customer_phone.trim(),
         customer_email: form.customer_email.trim() || undefined,
         vehicle_year: form.vehicle_year ? parseInt(form.vehicle_year) : undefined,
-        vehicle_make: form.vehicle_make.trim() || undefined,
+        vehicle_make: effectiveMake.trim() || undefined,
         vehicle_model: form.vehicle_model.trim() || undefined,
         vehicle_vin: form.vehicle_vin.trim() || undefined,
         drop_off_reason: form.drop_off_reason.trim() || undefined,
@@ -174,196 +428,236 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
-      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[92vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-          <h2 className="text-base font-semibold text-gray-900">New Appointment</h2>
-          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 text-lg">×</button>
-        </div>
+    <>
+      <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+        <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[92vh] flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+            <h2 className="text-base font-semibold text-gray-900">New Appointment</h2>
+            <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 text-xl">×</button>
+          </div>
 
-        <form onSubmit={handleSubmit} className="overflow-y-auto flex-1">
-          <div className="px-5 py-4 space-y-5">
+          <form onSubmit={handleSubmit} className="overflow-y-auto flex-1">
+            <div className="px-5 py-4 space-y-5">
 
-            {/* Customer */}
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Customer</p>
-              <div className="space-y-3">
-                {/* Phone with search */}
-                <div className="relative">
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Phone Number *</label>
-                  <input
-                    ref={phoneRef}
-                    type="tel"
-                    value={form.customer_phone}
-                    onChange={e => onPhoneChange(e.target.value)}
-                    onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
-                    onFocus={() => searchResults.length && setSearchOpen(true)}
-                    placeholder="(555) 555-5555"
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
-                  />
-                  {searchOpen && searchResults.length > 0 && (
-                    <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
-                      {searchResults.map(c => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onMouseDown={() => fillFromCustomer(c)}
-                          className="w-full px-4 py-2.5 text-left hover:bg-gray-50 border-b border-gray-50 last:border-0"
-                        >
-                          <p className="text-sm font-medium text-gray-900">{c.first_name} {c.last_name}</p>
-                          <p className="text-xs text-gray-400">{c.phone}{c.last_vehicle?.vehicle_make ? ` · ${[c.last_vehicle.vehicle_year, c.last_vehicle.vehicle_make, c.last_vehicle.vehicle_model].filter(Boolean).join(' ')}` : ''}</p>
-                        </button>
-                      ))}
+              {/* Customer */}
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Customer</p>
+                <div className="space-y-3">
+                  {/* Phone with search */}
+                  <div className="relative">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Phone Number *</label>
+                    <input
+                      type="tel"
+                      value={form.customer_phone}
+                      onChange={e => onPhoneChange(e.target.value)}
+                      onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+                      onFocus={() => searchResults.length && setSearchOpen(true)}
+                      placeholder="(555) 555-5555"
+                      style={{ fontSize: '16px' }}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
+                    />
+                    {searchOpen && searchResults.length > 0 && (
+                      <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+                        {searchResults.map(c => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onMouseDown={() => fillFromCustomer(c)}
+                            className="w-full px-4 py-2.5 text-left hover:bg-gray-50 border-b border-gray-50 last:border-0"
+                          >
+                            <p className="text-sm font-medium text-gray-900">{c.first_name} {c.last_name}</p>
+                            <p className="text-xs text-gray-400">{c.phone}{c.last_vehicle?.vehicle_make ? ` · ${[c.last_vehicle.vehicle_year, c.last_vehicle.vehicle_make, c.last_vehicle.vehicle_model].filter(Boolean).join(' ')}` : ''}</p>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">First Name *</label>
+                      <input
+                        type="text"
+                        value={form.first_name}
+                        onChange={e => onNameChange('first_name', e.target.value)}
+                        placeholder="John"
+                        style={{ fontSize: '16px' }}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
+                      />
                     </div>
-                  )}
-                </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Last Name *</label>
+                      <input
+                        type="text"
+                        value={form.last_name}
+                        onChange={e => onNameChange('last_name', e.target.value)}
+                        placeholder="Smith"
+                        style={{ fontSize: '16px' }}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
+                      />
+                    </div>
+                  </div>
 
-                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">First Name *</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Email <span className="text-gray-400 font-normal">(optional)</span></label>
                     <input
-                      type="text"
-                      value={form.first_name}
-                      onChange={e => onNameChange('first_name', e.target.value)}
-                      placeholder="John"
+                      type="email"
+                      value={form.customer_email}
+                      onChange={e => set('customer_email', e.target.value)}
+                      placeholder="john@example.com"
+                      style={{ fontSize: '16px' }}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Last Name *</label>
-                    <input
-                      type="text"
-                      value={form.last_name}
-                      onChange={e => onNameChange('last_name', e.target.value)}
-                      placeholder="Smith"
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Email <span className="text-gray-400 font-normal">(optional)</span></label>
-                  <input
-                    type="email"
-                    value={form.customer_email}
-                    onChange={e => set('customer_email', e.target.value)}
-                    placeholder="john@example.com"
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
-                  />
                 </div>
               </div>
-            </div>
 
-            {/* Vehicle */}
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Vehicle</p>
-              <div className="space-y-3">
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
-                    <input
-                      type="number"
-                      value={form.vehicle_year}
-                      onChange={e => set('vehicle_year', e.target.value)}
-                      placeholder="2022"
-                      min="1900" max="2100"
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
-                    />
+              {/* Vehicle */}
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Vehicle</p>
+                <div className="space-y-3">
+                  {/* Year / Make */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
+                      <YearSelect value={form.vehicle_year} onChange={v => set('vehicle_year', v)} />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Make</label>
+                      {makeOther ? (
+                        <div className="flex gap-1">
+                          <input
+                            type="text"
+                            value={makeOtherText}
+                            onChange={e => setMakeOtherText(e.target.value)}
+                            placeholder="Enter make"
+                            style={{ fontSize: '16px' }}
+                            className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => { setMakeOther(false); setMakeOtherText(''); set('vehicle_make', ''); set('vehicle_model', ''); }}
+                            className="px-2 text-gray-400 hover:text-gray-600 text-lg"
+                          >×</button>
+                        </div>
+                      ) : (
+                        <MakeSelect
+                          value={form.vehicle_make}
+                          onChange={v => { set('vehicle_make', v); set('vehicle_model', ''); }}
+                          onOther={() => setMakeOther(true)}
+                        />
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Make</label>
-                    <input
-                      type="text"
-                      value={form.vehicle_make}
-                      onChange={e => set('vehicle_make', e.target.value)}
-                      placeholder="Ford"
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
-                    />
-                  </div>
+
+                  {/* Model */}
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Model</label>
-                    <input
-                      type="text"
+                    <ModelSelect
+                      make={makeOther ? 'Other' : form.vehicle_make}
                       value={form.vehicle_model}
-                      onChange={e => set('vehicle_model', e.target.value)}
-                      placeholder="F-150"
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
+                      onChange={v => set('vehicle_model', v)}
+                    />
+                  </div>
+
+                  {/* VIN with scanner */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">VIN <span className="text-gray-400 font-normal">(optional)</span></label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={form.vehicle_vin}
+                        onChange={e => set('vehicle_vin', e.target.value.toUpperCase())}
+                        placeholder="1FTFW1ET0EKE12345"
+                        style={{ fontSize: '16px' }}
+                        className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-mono focus:outline-none focus:border-black"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowVINScanner(true)}
+                        title="Scan VIN barcode"
+                        className="flex-shrink-0 w-11 h-11 flex items-center justify-center border border-gray-200 rounded-xl hover:border-black hover:bg-gray-50 transition-colors"
+                      >
+                        {/* Camera / barcode icon */}
+                        <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9V6a1 1 0 011-1h3M3 15v3a1 1 0 001 1h3m12-16h-3a1 1 0 00-1 1v3m4 12h-3a1 1 0 01-1-1v-3M8 9h1m-1 3h1m-1 3h1m3-6h1m-1 3h1m-1 3h1m3-6h1m-1 3h1m-1 3h1" />
+                        </svg>
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">Tap the scanner icon to use your camera</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Appointment Details */}
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Appointment</p>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Drop-off Date *</label>
+                      <input
+                        type="date"
+                        value={form.date}
+                        onChange={e => set('date', e.target.value)}
+                        min={todayYMD()}
+                        style={{ fontSize: '16px' }}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Drop-off Time *</label>
+                      <select
+                        value={form.time}
+                        onChange={e => set('time', e.target.value)}
+                        style={{ fontSize: '16px' }}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black bg-white"
+                      >
+                        {TIME_OPTIONS.map(o => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Reason for Visit</label>
+                    <textarea
+                      value={form.drop_off_reason}
+                      onChange={e => set('drop_off_reason', e.target.value)}
+                      placeholder="Oil change, brake inspection, check engine light…"
+                      rows={2}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black resize-none"
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">VIN <span className="text-gray-400 font-normal">(optional)</span></label>
-                  <input
-                    type="text"
-                    value={form.vehicle_vin}
-                    onChange={e => set('vehicle_vin', e.target.value.toUpperCase())}
-                    placeholder="1FTFW1ET0EKE12345"
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-mono focus:outline-none focus:border-black"
-                  />
-                </div>
               </div>
+
             </div>
 
-            {/* Appointment Details */}
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Appointment</p>
-              <div className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Drop-off Date *</label>
-                    <input
-                      type="date"
-                      value={form.date}
-                      onChange={e => set('date', e.target.value)}
-                      min={todayYMD()}
-                      style={{ fontSize: '16px' }}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Drop-off Time *</label>
-                    <select
-                      value={form.time}
-                      onChange={e => set('time', e.target.value)}
-                      style={{ fontSize: '16px' }}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black bg-white"
-                    >
-                      {TIME_OPTIONS.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Reason for Visit</label>
-                  <textarea
-                    value={form.drop_off_reason}
-                    onChange={e => set('drop_off_reason', e.target.value)}
-                    placeholder="Oil change, brake inspection, check engine light..."
-                    rows={2}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-black resize-none"
-                  />
-                </div>
-              </div>
+            {/* Footer */}
+            <div className="px-5 pb-6 pt-2 border-t border-gray-100 flex-shrink-0 space-y-2">
+              {error && <p className="text-red-500 text-sm">{error}</p>}
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full bg-black text-white rounded-xl py-3 text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 transition-colors"
+              >
+                {submitting ? 'Saving…' : 'Confirm Appointment & Send Text'}
+              </button>
             </div>
-
-          </div>
-
-          {/* Footer */}
-          <div className="px-5 pb-5 pt-2 border-t border-gray-100 flex-shrink-0 space-y-2">
-            {error && <p className="text-red-500 text-sm">{error}</p>}
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full bg-black text-white rounded-xl py-3 text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 transition-colors"
-            >
-              {submitting ? 'Saving…' : 'Confirm Appointment & Send Text'}
-            </button>
-          </div>
-        </form>
+          </form>
+        </div>
       </div>
-    </div>
+
+      {showVINScanner && (
+        <VINScanner
+          onScan={vin => { set('vehicle_vin', vin); setShowVINScanner(false); }}
+          onClose={() => setShowVINScanner(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -384,8 +678,6 @@ export default function AppointmentsView() {
     headers: { Authorization: `Bearer ${session?.access_token}` },
   }), [session]);
 
-  const bookingLink = shopId ? `${window.location.origin}/schedule/${shopId}` : '';
-
   const fetchAppointments = useCallback(() => {
     if (!shopId) return;
     setLoading(true);
@@ -396,10 +688,6 @@ export default function AppointmentsView() {
   }, [shopId, authConfig]);
 
   useEffect(() => { fetchAppointments(); }, [fetchAppointments]);
-
-  function copyLink() {
-    navigator.clipboard.writeText(bookingLink).catch(() => {});
-  }
 
   async function updateStatus(aptId, newStatus) {
     setActionLoading(aptId + newStatus);
@@ -437,7 +725,7 @@ export default function AppointmentsView() {
       <div className="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
-            <button onClick={() => navigate('/advisor')} className="text-sm text-gray-500 hover:text-gray-700 flex-shrink-0">
+            <button onClick={() => navigate('/advisor')} className="text-sm text-gray-500 hover:text-gray-700 flex-shrink-0 p-1">
               ←
             </button>
             <h1 className="text-lg font-semibold text-gray-900 truncate">Appointments</h1>
@@ -458,7 +746,7 @@ export default function AppointmentsView() {
           </div>
         ) : grouped.length === 0 ? (
           <div className="text-center py-16">
-            <p className="text-gray-400 text-sm">No appointments found.</p>
+            <p className="text-gray-400 text-sm">No upcoming appointments.</p>
             <button
               onClick={() => setShowModal(true)}
               className="mt-3 text-sm text-black underline underline-offset-2"
