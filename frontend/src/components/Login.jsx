@@ -57,7 +57,7 @@ const Login = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 py-8"
-      style={{ background: 'linear-gradient(145deg, #0f0f0f 0%, #1a1a1a 50%, #111 100%)' }}>
+      style={{ background: 'linear-gradient(145deg, #0f0f0f 0%, #1a1a1a 50%, #111 100%)', paddingTop: 'max(2rem, env(safe-area-inset-top))', paddingBottom: 'max(2rem, env(safe-area-inset-bottom))', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }}>
 
       {/* Subtle dot grid background */}
       <div className="absolute inset-0 opacity-10 pointer-events-none"

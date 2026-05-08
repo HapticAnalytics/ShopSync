@@ -453,9 +453,17 @@ function NewAppointmentModal({ shopId, authConfig, onClose, onSaved }) {
                         title="Scan VIN barcode"
                         className="flex-shrink-0 w-11 h-11 flex items-center justify-center border border-gray-200 rounded-xl hover:border-black hover:bg-gray-50 transition-colors"
                       >
-                        {/* Camera / barcode icon */}
-                        <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9V6a1 1 0 011-1h3M3 15v3a1 1 0 001 1h3m12-16h-3a1 1 0 00-1 1v3m4 12h-3a1 1 0 01-1-1v-3M8 9h1m-1 3h1m-1 3h1m3-6h1m-1 3h1m-1 3h1m3-6h1m-1 3h1m-1 3h1" />
+                        {/* Barcode scanner icon */}
+                        <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 9V6a1 1 0 0 1 1-1h3" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 15v3a1 1 0 0 0 1 1h3" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M21 9V6a1 1 0 0 0-1-1h-3" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M21 15v3a1 1 0 0 1-1 1h-3" />
+                          <line strokeLinecap="round" x1="7" y1="9" x2="7" y2="15" />
+                          <line strokeLinecap="round" x1="10" y1="9" x2="10" y2="15" />
+                          <line strokeLinecap="round" x1="12.5" y1="9" x2="12.5" y2="15" />
+                          <line strokeLinecap="round" x1="15" y1="9" x2="15" y2="15" />
+                          <line strokeLinecap="round" x1="17" y1="9" x2="17" y2="15" />
                         </svg>
                       </button>
                     </div>
@@ -593,9 +601,15 @@ export default function AppointmentsView() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div
+      className="min-h-screen bg-gray-50"
+      style={{ paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+    >
       {/* Header */}
-      <div className="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-10">
+      <div
+        className="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-10"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <button onClick={() => navigate('/advisor')} className="text-sm text-gray-500 hover:text-gray-700 flex-shrink-0 p-1">

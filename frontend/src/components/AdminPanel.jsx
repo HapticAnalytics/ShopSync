@@ -94,6 +94,17 @@ const AdminPanel = () => {
     }
   };
 
+  const handleDeleteUser = async (user) => {
+    if (!window.confirm(`Permanently delete ${user.full_name || user.email}? This cannot be undone.`)) return;
+    try {
+      await axios.delete(`${API_BASE}/admin/users/${user.user_id}`, authConfig());
+      showFeedback('User deleted');
+      fetchData();
+    } catch (err) {
+      showFeedback('Failed to delete user: ' + (err.response?.data?.detail || err.message), true);
+    }
+  };
+
   const handleUpdateUserShop = async (userId, shopId) => {
     try {
       await axios.patch(
@@ -112,9 +123,15 @@ const AdminPanel = () => {
   const labelClass = "block text-sm font-medium text-gray-700 mb-2";
 
   return (
-    <div className="min-h-screen bg-white">
+    <div
+      className="min-h-screen bg-white"
+      style={{ paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+    >
       {/* Header */}
-      <div className="bg-white/80 backdrop-blur-2xl border-b border-gray-200 sticky top-0 z-50">
+      <div
+        className="bg-white/80 backdrop-blur-2xl border-b border-gray-200 sticky top-0 z-50"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
           <div className="flex items-center justify-between">
             <div>
@@ -377,16 +394,26 @@ const AdminPanel = () => {
                                 ))}
                               </select>
                               {user.user_id !== userProfile?.user_id && (
-                                <button
-                                  onClick={() => handleToggleUserActive(user)}
-                                  className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
-                                    user.active
-                                      ? 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
-                                      : 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'
-                                  }`}
-                                >
-                                  {user.active ? 'Deactivate' : 'Activate'}
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() => handleToggleUserActive(user)}
+                                    className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
+                                      user.active
+                                        ? 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                                        : 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'
+                                    }`}
+                                  >
+                                    {user.active ? 'Deactivate' : 'Activate'}
+                                  </button>
+                                  {!user.active && (
+                                    <button
+                                      onClick={() => handleDeleteUser(user)}
+                                      className="px-3 py-1.5 text-xs font-medium rounded-full transition-all bg-gray-900 text-white hover:bg-black border border-gray-900"
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                </>
                               )}
                             </div>
                           </div>

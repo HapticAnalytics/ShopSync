@@ -376,6 +376,27 @@ async def admin_update_user(user_id: str, update: UserUpdate, admin: dict = Depe
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
+    """Delete a deactivated user. Only allowed when the user is already inactive."""
+    if user_id == admin["user_id"]:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    try:
+        user_resp = supabase.table("users").select("active,email").eq("user_id", user_id).execute()
+        if not user_resp.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        if user_resp.data[0].get("active"):
+            raise HTTPException(status_code=400, detail="Deactivate the user before deleting")
+        supabase.table("users").delete().eq("user_id", user_id).execute()
+        logger.info(f"Admin {admin['email']} deleted user {user_resp.data[0].get('email')}")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"admin_delete_user error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Vehicle endpoints ──────────────────────────────────────────────────────────
 
 @app.post("/vehicles/", response_model=VehicleResponse)
@@ -583,6 +604,14 @@ async def ai_chat(vehicle_id: str, data: AIChatMessage):
             conv_messages.append({"role": role, "content": msg["message_text"]})
         conv_messages.append({"role": "user", "content": data.message})
 
+        # Save the customer message first — this ensures it's always persisted
+        # even if the Anthropic call fails or the AI message insert fails.
+        supabase.table("messages").insert({
+            "vehicle_id": vehicle_id,
+            "sender_type": "customer",
+            "message_text": data.message,
+        }).execute()
+
         if not anthropic_client:
             ai_text = "Our AI assistant isn't available right now. A service advisor will respond to your message shortly."
         else:
@@ -603,11 +632,16 @@ async def ai_chat(vehicle_id: str, data: AIChatMessage):
             )
             ai_text = ai_resp.content[0].text
 
-        # Save both messages
-        supabase.table("messages").insert([
-            {"vehicle_id": vehicle_id, "sender_type": "customer", "message_text": data.message},
-            {"vehicle_id": vehicle_id, "sender_type": "ai", "message_text": ai_text},
-        ]).execute()
+        # Save AI response separately so a constraint/type error here doesn't
+        # affect the already-saved customer message.
+        try:
+            supabase.table("messages").insert({
+                "vehicle_id": vehicle_id,
+                "sender_type": "ai",
+                "message_text": ai_text,
+            }).execute()
+        except Exception as ai_save_err:
+            logger.warning(f"ai_chat: failed to save AI message (non-critical): {ai_save_err}")
 
         return {"response": ai_text}
 

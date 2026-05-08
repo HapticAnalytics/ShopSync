@@ -116,7 +116,7 @@ const CustomerPortal = () => {
     setNewMessage('');
 
     if (chatMode === 'ai') {
-      // Optimistically add customer message to the list
+      // Optimistically add customer message so it's immediately visible
       const tempId = `temp-${Date.now()}`;
       const customerMsg = {
         message_id: tempId,
@@ -131,12 +131,18 @@ const CustomerPortal = () => {
         await axios.post(`${API_BASE}/vehicles/${vehicle.vehicle_id}/ai-chat`, {
           message: text,
         });
-        // Fetch real messages (replaces temp + includes AI response)
-        await fetchMessages(vehicle.vehicle_id);
+        // Fetch real messages — this replaces the temp msg with DB-persisted copies
+        // and adds the AI response. Only update if we actually got data back.
+        const resp = await axios.get(`${API_BASE}/vehicles/${vehicle.vehicle_id}/messages`);
+        if (resp.data && resp.data.length > 0) {
+          setMessages(resp.data);
+        }
+        // If somehow empty, leave optimistic message in place
       } catch (err) {
         console.error('AI chat failed:', err);
-        // On error, reload messages to show whatever was saved
-        await fetchMessages(vehicle.vehicle_id);
+        // Do NOT call fetchMessages here — it would return [] and wipe the
+        // optimistic message. Leave what the user typed visible; the 30-second
+        // poll will sync once the backend has persisted it.
       } finally {
         setAiLoading(false);
       }

@@ -44,7 +44,8 @@ export default function ResetPassword() {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4"
+      style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))', paddingBottom: 'max(1rem, env(safe-area-inset-bottom))', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }}>
       <div className="w-full max-w-sm bg-white rounded-3xl shadow-lg p-8 border border-gray-100">
         <h1 className="text-xl font-semibold text-gray-900 mb-1">Set new password</h1>
         <p className="text-sm text-gray-500 mb-6">Choose a strong password for your account.</p>
