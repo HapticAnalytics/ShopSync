@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Black rounded-square background (matches iOS icon shape) -->
+  <rect width="512" height="512" rx="113" ry="113" fill="#000"/>
+  <!-- Sync arrows, original 22x22 design scaled to fill ~280x280, centered in 512x512 -->
+  <!-- translate(116,116) centers the 280x280 content: (512-280)/2 = 116 -->
+  <!-- scale(12.727) = 280/22 -->
+  <g transform="translate(116 116) scale(12.727)" fill="none" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+    <path d="M4.5 11C4.5 7.41 7.41 4.5 11 4.5c1.86 0 3.54.75 4.76 1.97"/>
+    <polyline points="13.5,3.5 15.9,6.5 13.1,8.5"/>
+    <path d="M17.5 11c0 3.59-2.91 6.5-6.5 6.5-1.86 0-3.54-.75-4.76-1.97"/>
+    <polyline points="8.5,18.5 6.1,15.5 8.9,13.5"/>
+  </g>
+</svg>
